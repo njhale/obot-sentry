@@ -42,8 +42,25 @@ type claudeCodeScanner struct{}
 
 func (claudeCodeScanner) Name() string { return "claude_code" }
 
-func (claudeCodeScanner) Presence(string) presenceDef {
-	return presenceDef{binaries: []string{"claude"}, configPaths: []string{".claude"}}
+func (claudeCodeScanner) Presence(platform string) presenceDef {
+	// The bare ~/.claude directory is NOT a presence signal: hook
+	// installers (including obot-sentry itself), IDE plugins, and shared
+	// skill conventions all create it. ~/.claude.json and the
+	// native-installer artifacts below are written by Claude Code's own
+	// CLI/installer.
+	def := presenceDef{
+		binaries: []string{"claude"},
+		installPaths: []string{
+			".local/bin/claude",    // native-installer launcher
+			".local/share/claude",  // native-installer version store
+			".claude/local/claude", // legacy migrate-installer location
+		},
+		configFiles: []string{claudeGlobalConfigRel},
+	}
+	if platform == "windows" {
+		def.installPaths = []string{".local/bin/claude.exe", ".local/share/claude"}
+	}
+	return def
 }
 
 func (claudeCodeScanner) GlobalConfigs(string) []string { return []string{claudeGlobalConfigRel} }

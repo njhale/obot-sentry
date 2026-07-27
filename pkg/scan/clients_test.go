@@ -204,9 +204,10 @@ func TestScanners_Smoke(t *testing.T) {
 			if s.ConfigHash == "" {
 				t.Errorf("ConfigHash empty")
 			}
-			// build() must synthesize a clients[] row whenever an
-			// observation references a client, even if presence didn't
-			// fire in the test environment.
+			// Every case's config sits in the client's config dir (or,
+			// for claude_code, is ~/.claude.json itself), so presence
+			// detection against the in-memory root must produce the
+			// clients[] row.
 			client := findClient(manifest, c.client)
 			if client == nil {
 				t.Fatalf("no clients[] row synthesized for %q", c.client)
@@ -410,6 +411,7 @@ func TestScanHermes_ConfigRecordedWithoutServers(t *testing.T) {
 func TestScanClaudeCodePlugins(t *testing.T) {
 	installDir := ".claude/plugins/cache/acme/tools"
 	manifest := runScan(t, map[string]string{
+		".claude.json":                             `{}`, // claude_code is installed
 		".claude/plugins/installed_plugins.json":   `{"plugins":{"tools@acme":[{"installPath":"/home/test/` + installDir + `","version":"2.1.0"}]}}`,
 		".claude/settings.json":                    `{"enabledPlugins":{"tools@acme":true}}`,
 		installDir + "/.claude-plugin/plugin.json": `{"name":"tools","description":"Handy tools","author":{"name":"Acme"}}`,
@@ -636,6 +638,49 @@ func TestPresence_ConfigDirWithProfile(t *testing.T) {
 	}
 	if c.ConfigPath != profileDir {
 		t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, profileDir)
+	}
+}
+
+// TestScan_ClaudeCodePresenceSignals pins what counts as a Claude Code
+// install. The bare ~/.claude directory must not count — hook
+// installers (obot-sentry itself), IDE plugins, and shared skill
+// conventions all create it — while ~/.claude.json and the native
+// installer's artifacts must (issue #7288).
+func TestScan_ClaudeCodePresenceSignals(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		".claude/settings.json":       `{"hooks":{}}`,
+		".claude/skills/pdf/SKILL.md": namedSkill("pdf"),
+	})
+	if c := findClient(manifest, "claude_code"); c != nil {
+		t.Errorf("claude_code detected from bare ~/.claude contents: %+v", c)
+	}
+	// With no installed client reading ~/.claude/skills, the skill is
+	// dropped rather than attributed to absent clients.
+	if len(manifest.Skills) != 0 {
+		t.Errorf("skills reported with no installed reader: %+v", manifest.Skills)
+	}
+
+	manifest = runScan(t, map[string]string{".claude.json": `{}`})
+	c := findClient(manifest, "claude_code")
+	if c == nil {
+		t.Fatalf("claude_code not detected from ~/.claude.json: %+v", manifest.Clients)
+	}
+	if want := filepath.Join("/home/test", ".claude.json"); c.ConfigPath != want {
+		t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, want)
+	}
+
+	manifest = runScan(t, map[string]string{".local/bin/claude": "elf"})
+	c = findClient(manifest, "claude_code")
+	if c == nil {
+		t.Fatalf("claude_code not detected from ~/.local/bin/claude: %+v", manifest.Clients)
+	}
+	if want := filepath.Join("/home/test", ".local/bin/claude"); c.InstallPath != want {
+		t.Errorf("InstallPath = %q, want %q", c.InstallPath, want)
+	}
+
+	manifest = runScanPlatform(t, "windows", map[string]string{".local/bin/claude.exe": "mz"})
+	if findClient(manifest, "claude_code") == nil {
+		t.Fatalf("claude_code not detected from ~/.local/bin/claude.exe on windows: %+v", manifest.Clients)
 	}
 }
 

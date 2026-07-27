@@ -47,6 +47,7 @@ type Scanner interface {
 // implementing Scanner. Order is alphabetical so emit order is
 // deterministic.
 var scanners = []Scanner{
+	antigravityScanner{},
 	claudeCodeScanner{},
 	claudeDesktopScanner{},
 	codexScanner{},

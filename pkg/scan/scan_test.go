@@ -68,59 +68,68 @@ func namedSkill(name string) string {
 }
 
 // TestScan_SkillClientSets verifies that skills in shared directories
-// are attributed to every client that discovers that location — the
-// fix for a skill installed to ~/.agents/skills showing up under a
-// synthetic "multi" client instead of (among others) VS Code.
+// are attributed to the installed clients that discover that location
+// — and only those. A skill none of its discovering clients could read
+// is dropped entirely, SKILL.md file row included, and skill
+// attribution alone never synthesizes a clients[] row.
 func TestScan_SkillClientSets(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".cursor/mcp.json":                   `{}`, // cursor is installed; nothing else is
 		".agents/skills/doc/SKILL.md":        namedSkill("doc"),
 		".claude/skills/pdf/SKILL.md":        namedSkill("pdf"),
 		".gemini/config/skills/gem/SKILL.md": namedSkill("gem"),
 	})
 
-	if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"codex", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	// ~/.agents/skills is read by codex, cursor, opencode, and vscode,
+	// ~/.claude/skills by claude_code, cursor, opencode, and vscode;
+	// only the installed reader gets a row.
+	if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"cursor"}; !slices.Equal(got, want) {
 		t.Errorf("~/.agents/skills clients = %v, want %v", got, want)
 	}
-	if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"claude_code", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"cursor"}; !slices.Equal(got, want) {
 		t.Errorf("~/.claude/skills clients = %v, want %v", got, want)
 	}
-	if got, want := skillClients(manifest, ".gemini/config/skills/gem/SKILL.md"), []string{"antigravity"}; !slices.Equal(got, want) {
-		t.Errorf("~/.gemini/config/skills clients = %v, want %v", got, want)
+
+	// ~/.gemini/config/skills is read only by antigravity, which isn't
+	// installed: the skill and its SKILL.md file row are dropped.
+	if got := skillClients(manifest, ".gemini/config/skills/gem/SKILL.md"); len(got) != 0 {
+		t.Errorf("~/.gemini/config/skills clients = %v, want none (antigravity not installed)", got)
+	}
+	gemMarker := filepath.Join("/home/test", ".gemini/config/skills/gem/SKILL.md")
+	for _, f := range manifest.Files {
+		if f.Path == gemMarker {
+			t.Errorf("dropped skill's SKILL.md still recorded in files[]")
+		}
 	}
 
 	for _, sk := range manifest.Skills {
 		if sk.Client == "multi" {
-			t.Errorf("skill %q still attributed to the retired multi client", sk.Name)
+			t.Errorf("skill %q attributed to the multi sentinel", sk.Name)
 		}
 	}
 
-	// Every referenced client gets a clients[] row with HasSkills set.
-	for _, name := range []string{"vscode", "codex", "cursor", "opencode", "claude_code", "antigravity"} {
-		c := findClient(manifest, name)
-		if c == nil {
-			t.Errorf("no clients[] row synthesized for %q", name)
-			continue
-		}
-		if !c.HasSkills {
-			t.Errorf("HasSkills = false for %q", name)
-		}
+	if len(manifest.Clients) != 1 || manifest.Clients[0].Name != "cursor" {
+		t.Fatalf("clients = %+v, want exactly [cursor]", manifest.Clients)
 	}
-	if c := findClient(manifest, ""); c != nil {
-		t.Errorf("clients[] row synthesized for empty client name")
+	if !manifest.Clients[0].HasSkills {
+		t.Errorf("cursor HasSkills = false")
 	}
 }
 
 // TestScan_ProjectSkills covers project-scope attribution: the client
 // set can differ from the global set for the same directory name
 // (Antigravity reads project .agents/skills but not ~/.agents/skills),
-// and ProjectPath points at the enclosing project.
+// rows are limited to installed clients, and ProjectPath points at the
+// enclosing project.
 func TestScan_ProjectSkills(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".vscode/argv.json":                       `{}`, // vscode is installed
+		".antigravity-ide/keep":                   "",   // antigravity is installed
 		"work/app/.agents/skills/deploy/SKILL.md": namedSkill("deploy"),
 		"work/app/.github/skills/gh/SKILL.md":     namedSkill("gh"),
 	})
 
-	if got, want := skillClients(manifest, "work/app/.agents/skills/deploy/SKILL.md"), []string{"antigravity", "codex", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	if got, want := skillClients(manifest, "work/app/.agents/skills/deploy/SKILL.md"), []string{"antigravity", "vscode"}; !slices.Equal(got, want) {
 		t.Errorf("project .agents/skills clients = %v, want %v", got, want)
 	}
 	if got, want := skillClients(manifest, "work/app/.github/skills/gh/SKILL.md"), []string{"vscode"}; !slices.Equal(got, want) {
@@ -176,6 +185,7 @@ func TestScan_RootSkillMarkerIgnored(t *testing.T) {
 // to the immediate child directory.
 func TestScan_NestedSkillMarkersSuppressed(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".cursor/mcp.json":                               `{}`, // cursor reads both locations
 		".claude/skills/creator/SKILL.md":                namedSkill("creator"),
 		".claude/skills/creator/examples/demo/SKILL.md":  namedSkill("demo"),
 		"app/.agents/skills/top/SKILL.md":                namedSkill("top"),
@@ -202,6 +212,7 @@ func TestScan_NestedSkillMarkersSuppressed(t *testing.T) {
 // content capture in files[].
 func TestScan_SkillMetadata(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".claude.json":                       `{}`, // claude_code is installed
 		".claude/skills/full/SKILL.md":       "---\nname: full-skill\ndescription: a described skill\n---\nbody\n",
 		".claude/skills/full/scripts/run.sh": "#!/bin/sh\n",
 		".claude/skills/full/notes.md":       "notes\n",
@@ -253,17 +264,48 @@ func TestScan_SkillMetadata(t *testing.T) {
 
 // TestScan_MultiRoot verifies observations from a second root (e.g. a
 // WSL home scanned from Windows) merge into one manifest with paths
-// anchored at each root.
+// anchored at each root, that root-relative presence signals are
+// detected on non-primary roots, and that skill attribution stays
+// per-root: claude_code on root A and cursor on root B each read only
+// their own root's skills, even though both share the same discovery
+// directories.
 func TestScan_MultiRoot(t *testing.T) {
-	rootA := mapRoot(map[string]string{".claude/skills/a/SKILL.md": namedSkill("a")})
+	rootA := mapRoot(map[string]string{
+		".claude.json":              `{}`, // claude_code installed on root A only
+		".claude/skills/a/SKILL.md": namedSkill("a"),
+	})
 	rootB := Root{
-		FS:         fstest.MapFS{".agents/skills/b/SKILL.md": &fstest.MapFile{Data: []byte(namedSkill("b"))}},
+		FS: fstest.MapFS{
+			".agents/skills/b/SKILL.md": &fstest.MapFile{Data: []byte(namedSkill("b"))},
+			".claude/skills/c/SKILL.md": &fstest.MapFile{Data: []byte(namedSkill("c"))},
+			".cursor/mcp.json":          &fstest.MapFile{Data: []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)}, // cursor installed on root B only
+		},
 		Path:       "/mnt/wsl/ubuntu/home/other",
 		NativePath: "/home/other",
 		Platform:   "linux",
 	}
 
 	manifest := runScanRoots(t, []Root{rootA, rootB})
+
+	cursor := findClient(manifest, "cursor")
+	if cursor == nil {
+		t.Fatalf("cursor not detected on non-primary root: %+v", manifest.Clients)
+	}
+	if want := filepath.Join("/mnt/wsl/ubuntu/home/other", ".cursor"); cursor.ConfigPath != want {
+		t.Errorf("cursor ConfigPath = %q, want %q", cursor.ConfigPath, want)
+	}
+
+	// Root A's ~/.claude/skills is readable by cursor too, but cursor is
+	// only installed on root B — and vice versa for claude_code.
+	if got, want := skillClients(manifest, "/home/test/.claude/skills/a/SKILL.md"), []string{"claude_code"}; !slices.Equal(got, want) {
+		t.Errorf("root A skill clients = %v, want %v", got, want)
+	}
+	if got, want := skillClients(manifest, "/mnt/wsl/ubuntu/home/other/.claude/skills/c/SKILL.md"), []string{"cursor"}; !slices.Equal(got, want) {
+		t.Errorf("root B .claude skill clients = %v, want %v", got, want)
+	}
+	if got, want := skillClients(manifest, "/mnt/wsl/ubuntu/home/other/.agents/skills/b/SKILL.md"), []string{"cursor"}; !slices.Equal(got, want) {
+		t.Errorf("root B .agents skill clients = %v, want %v", got, want)
+	}
 
 	var haveA, haveB bool
 	for _, sk := range manifest.Skills {

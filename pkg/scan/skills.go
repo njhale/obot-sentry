@@ -15,8 +15,10 @@ import (
 const MultiClient = "multi"
 
 // skill is one discovered skill plus the set of clients that can
-// discover it. The embedded wire row's Client field is left empty;
-// build fans the row out per client.
+// discover it, filtered to the clients installed on the skill's root
+// before it leaves scanRoot (see filterSkillsToPresent). The embedded
+// wire row's Client field is left empty; build fans the row out per
+// client.
 type skill struct {
 	types.DeviceScanSkill
 	// clients are the canonical names of the clients that read the
@@ -88,8 +90,6 @@ var skillDirRules = []skillDirRule{
 		project: []string{"vscode"}},
 	{dir: ".opencode/skills",
 		project: []string{"opencode"}},
-	{dir: ".skillport/skills",
-		global: []string{"skillport"}},
 }
 
 // homeClientTool maps the first home-relative path component to a
@@ -97,13 +97,12 @@ var skillDirRules = []skillDirRule{
 // anywhere under a client's own dot-directory but outside a documented
 // skills directory (e.g. .hermes/skills/official/apple/…/SKILL.md).
 var homeClientTool = map[string]string{
-	".claude":    "claude_code",
-	".codeium":   "windsurf",
-	".codex":     "codex",
-	".cursor":    "cursor",
-	".hermes":    "hermes",
-	".skillport": "skillport",
-	".windsurf":  "windsurf",
+	".claude":   "claude_code",
+	".codeium":  "windsurf",
+	".codex":    "codex",
+	".cursor":   "cursor",
+	".hermes":   "hermes",
+	".windsurf": "windsurf",
 }
 
 // scanSkills discovers skills under one root: the documented global
@@ -202,6 +201,37 @@ func classifySkillMarker(s *state, rel string) (skillDir string, clients []strin
 		return skillDir, []string{tool}, ""
 	}
 	return skillDir, nil, s.abs(skillDir)
+}
+
+// filterSkillsToPresent intersects each skill's discovering-client set
+// with the clients detected on the skill's own root, dropping skills
+// none of them reads — their SKILL.md file rows included, so the
+// manifest carries no trace (only ingestSkill registers SKILL.md
+// files, so nothing else references them). The intersection is per
+// root on purpose: a client installed only on the Windows host doesn't
+// read a WSL home's skills. Free-floating skills (empty set) pass
+// through untouched and are emitted as MultiClient.
+func filterSkillsToPresent(s *state, skills []skill, present map[string]bool) []skill {
+	out := skills[:0]
+	for _, sk := range skills {
+		if len(sk.clients) == 0 {
+			out = append(out, sk)
+			continue
+		}
+		var kept []string
+		for _, c := range sk.clients {
+			if present[c] {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.files, sk.File)
+			continue
+		}
+		sk.clients = kept
+		out = append(out, sk)
+	}
+	return out
 }
 
 // underAnyDir reports whether rel sits below any of the given

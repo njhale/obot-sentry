@@ -95,7 +95,12 @@ func Scan(ctx context.Context, opts Options) (types.DeviceScanManifest, error) {
 //  4. Skill discovery: documented skills directories first, then the
 //     walk markers, attributed to the set of clients that read each
 //     location.
-//  5. Client presence detection (primary root only).
+//  5. Client presence detection: root-relative signals for every root,
+//     host-level signals (PATH, app bundles) for the primary root only.
+//     Skill client sets are then filtered to the clients detected on
+//     this root — a client installed elsewhere (e.g. on the Windows
+//     host) doesn't read this root's skills — and skills left with no
+//     reader are dropped.
 func scanRoot(ctx context.Context, s *state) (observations, error) {
 	var (
 		obs       observations
@@ -127,9 +132,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 	}
 	obs.skills = append(obs.skills, scanSkills(s, skillMarkers)...)
 
-	if s.primary {
-		detectPresence(s)
-	}
+	obs.skills = filterSkillsToPresent(s, obs.skills, detectPresence(s))
 	return obs, nil
 }
 
@@ -137,12 +140,15 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 // manifest. Files are path-sorted and clients name-sorted; observations
 // stay in emit order.
 //
-// Skills carry a set of discovering clients internally, but the wire
-// type can only name one client per row, so each skill is emitted once
-// per client (rows share the same File). Skills no client discovers are
-// emitted once as MultiClient. A clients[] row is synthesized for any
-// real client name referenced by an observation without a
-// presence-detected row; MultiClient never gets one.
+// Skills carry a set of discovering clients internally — already
+// filtered per root to installed clients by filterSkillsToPresent —
+// but the wire type can only name one client per row, so each skill is
+// emitted once per client in its set (rows share the same File).
+// Skills with no known discovering client anywhere (a free-floating
+// SKILL.md in a repo) are emitted once as MultiClient. clients[] holds
+// presence-detected clients only: an observation referencing another
+// client name (e.g. a project config committed to a repo) does not
+// make that client "installed" and gets no row.
 func build(files map[string]types.DeviceScanFile, clients map[string]types.DeviceScanClient, obs observations) types.DeviceScanManifest {
 	out := types.DeviceScanManifest{
 		Files:      make([]types.DeviceScanFile, 0, len(files)),
@@ -189,16 +195,6 @@ func build(files map[string]types.DeviceScanFile, clients map[string]types.Devic
 	}
 	for _, p := range out.Plugins {
 		hasPlugin[p.Client] = true
-	}
-	for _, set := range []map[string]bool{hasMCP, hasSkill, hasPlugin} {
-		for name := range set {
-			if name == "" || name == MultiClient {
-				continue
-			}
-			if _, ok := clients[name]; !ok {
-				clients[name] = types.DeviceScanClient{Name: name}
-			}
-		}
 	}
 
 	for _, name := range sortedKeys(clients) {
