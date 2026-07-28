@@ -1,0 +1,32 @@
+#!/bin/bash
+# postinstall - runs as root after the payload lands. Mirrors what the MSI's
+# custom actions and MachineDataDir component do on Windows:
+#
+#   - Prepares the machine-scoped data dir (pkg/datadir.MachineDir) so
+#     whichever user scans first can create the shared device identity.
+#     Mode 1777 gives ProgramData-equivalent semantics: any user may create
+#     files, the sticky bit keeps users from replacing each other's. The
+#     identity files are written O_EXCL and world-readable by design.
+#   - Loads the hook-install LaunchDaemon (system domain) and the scan
+#     LaunchAgent (console user's gui domain). RunAtLoad gives both an
+#     install-time first run, matching the MSI's Start-ScheduledTask kick.
+#     Other users' sessions pick the agent up at their next login.
+#
+# bootout-then-bootstrap makes upgrades reload the new binary and plists.
+# launchctl failures are tolerated: at the loginwindow there is no gui
+# domain, and the jobs load on the next boot/login regardless.
+set -euo pipefail
+
+install -d -o root -g wheel -m 755 "/Library/Application Support/obot"
+install -d -o root -g wheel -m 1777 "/Library/Application Support/obot/obot-sentry"
+
+launchctl bootout system/ai.obot.obot-sentry.hook-install 2>/dev/null || true
+launchctl bootstrap system /Library/LaunchDaemons/ai.obot.obot-sentry.hook-install.plist 2>/dev/null || true
+
+consoleUID="$(stat -f %u /dev/console 2>/dev/null || echo "")"
+if [[ -n "$consoleUID" && "$consoleUID" != "0" ]]; then
+	launchctl bootout "gui/${consoleUID}/ai.obot.obot-sentry.scan" 2>/dev/null || true
+	launchctl bootstrap "gui/${consoleUID}" /Library/LaunchAgents/ai.obot.obot-sentry.scan.plist 2>/dev/null || true
+fi
+
+exit 0

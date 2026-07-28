@@ -1,0 +1,140 @@
+# Deploy Obot Sentry to macOS with Microsoft Intune
+
+This download contains three files, all deployed to the same device group:
+
+- `obot-sentry.pkg` — the obot-sentry device agent (version
+  {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
+  two launchd jobs.
+- `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The
+  server URL and scan interval are already filled in; you supply the
+  enrollment key.
+- `ai.obot.obot-sentry.pppc.mobileconfig` — the file access the agent's
+  background scans need. Upload as-is.
+
+The file names are stable across versions, so upgrades never require editing
+anything.
+
+## 1. Add the installer
+
+Obot Sentry installs a command-line tool rather than an `.app` bundle, and its
+installer runs a script — packages that install outside `/Applications` and
+carry scripts are exactly what Microsoft documents the **macOS app (PKG)** type
+for. It requires the Intune management agent for macOS (version 2308.006 or
+later), which Intune installs on the device the first time you assign a PKG app
+or shell script to it.
+
+1. In the Intune admin center, go to *Apps > macOS > Add*, select **macOS app
+   (PKG)**, and upload `obot-sentry.pkg`.
+
+2. **Detection rules:** set **Ignore app version** to **Yes**, then remove every
+   entry from **Included apps**. That list is only for `.app` bundles the
+   package installs, and Obot Sentry installs none — Microsoft documents that
+   non-application entries left in it stop the app from ever reporting a
+   successful install.
+
+3. **Assign** the app as **Required** to the device groups that should report to
+   this configuration.
+
+To confirm an install on a device directly: `pkgutil --pkg-info ai.obot.obot-sentry`.
+
+## 2. Push the configuration
+
+1. Open `ai.obot.obot-sentry.mobileconfig` in a text editor and replace
+   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key.
+
+2. Go to *Devices > Configuration > Create > New policy*, choose platform
+   **macOS** and profile type **Templates > Custom**, then upload the edited
+   file.
+
+3. Assign it to the same device group.
+
+To rotate the key or retune the scan interval later, edit the file, bump
+`PayloadVersion` on both the inner and outer payload, and re-upload. Devices
+pick the change up on their next profile sync — no reinstall.
+
+## 3. Grant file access
+
+Create a second **Templates > Custom** profile, upload
+`ai.obot.obot-sentry.pppc.mobileconfig` as-is, and assign it to the same group.
+
+Scans run in the background, where macOS cannot prompt for consent, so without
+this profile the agent silently skips protected locations such as `~/Desktop`,
+`~/Documents`, and `~/Downloads`. The profile pins Obot's Developer ID
+signature, so it grants access to nothing else. macOS only honors these grants
+on devices enrolled through Automated Device Enrollment or a user-approved
+enrollment.
+
+## What the installer does
+
+- Installs `obot-sentry` to `/usr/local/bin`.
+- Installs a LaunchAgent (`ai.obot.obot-sentry.scan`) that macOS runs in each
+  signed-in user's session, as that user, at login and every 15 minutes. Each
+  run submits a scan at most every {{.scanIntervalMinutes}} minutes
+  (`ScanIntervalMinutes` in the configuration profile — change it there to
+  retune without reinstalling).
+- Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as
+  root at load and hourly. It converges the managed local-agent audit hooks for
+  the signed-in user, so hooks are re-checked for drift every hour.
+- Prepares `/Library/Application Support/obot/obot-sentry`, where the device
+  identity shared by every user on the Mac is stored.
+
+Upgrades re-upload the same file name and reload both launchd jobs, carrying the
+configuration forward: the profiles are untouched by an app update, and the
+device identity and scan state live outside the package.
+
+## Uninstall
+
+Remove the hooks first: they invoke `obot-sentry` by path, so removing the agent
+while its hooks are still configured leaves each coding agent trying to run a
+command that no longer exists.
+
+### 1. Remove the hooks
+
+`hook-install` has no uninstall command, so removing the app stops future
+convergence but leaves the hooks already written into each user's agent
+configuration. Removing them is a per-user, per-device edit that Intune cannot
+make on its own; run it as a shell script, or have each user run it.
+
+Every entry Obot Sentry writes is marked with `--managed-by obot-sentry`. Find
+the files that still carry one:
+
+```sh
+grep -rl 'managed-by obot-sentry' \
+  "$HOME/.claude" "$HOME/.copilot" \
+  "$HOME/Library/Application Support/Code/User" \
+  /etc/codex "/Library/Application Support/Cursor" 2>/dev/null
+```
+
+- `$HOME/.copilot/hooks/obot-sentry.json` is written only by Obot Sentry —
+  delete the whole file.
+- `~/.claude/settings.json`, `/etc/codex/requirements.toml`, and
+  `/Library/Application Support/Cursor/hooks.json` are shared with your own
+  configuration — delete only the hook entries whose command contains
+  `--managed-by obot-sentry` (the last two are machine-wide and need `sudo`).
+- In `~/Library/Application Support/Code/User/settings.json`, remove the keys
+  Obot Sentry added under `chat.hookFilesLocations` (`~/.copilot/hooks`,
+  `.claude/settings.json`, `.claude/settings.local.json`,
+  `~/.claude/settings.json`).
+
+The per-user files exist once per signed-in user, so repeat for each user on a
+shared Mac. Restart Claude Code, Codex, VS Code, and Cursor afterward to drop
+the hooks.
+
+### 2. Remove the agent
+
+Unassign the app and both configuration profiles, then run `uninstall.sh` on
+each device as a **shell script** (*Devices > Scripts > Add > macOS*), leaving
+**Run script as signed-in user** set to **No**. It unloads both launchd jobs and
+removes the binary, the plists, the package receipt, the shared device identity,
+and every user's scan state. It is idempotent, so a device that already ran it
+is unaffected.
+
+A script is the only route: Intune's PKG app type has no **Uninstall**
+assignment, and an app the Intune agent installed stays on the device when that
+device is retired. Run this before retiring a Mac, while it is still managed.
+
+To run it by hand on one device instead:
+
+```sh
+sudo bash uninstall.sh
+```

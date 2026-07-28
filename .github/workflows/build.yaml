@@ -3,7 +3,7 @@ name: build
 # Builds the MDM assets end to end: compiled binaries (Windows exe,
 # macOS universal binary) → platform installers → assembled
 # dist/mdm-assets (manifest + files), published as the mdm-assets
-# workflow artifact obot consumes (OBOT_SERVER_MDM_ASSETS_PATH).
+# workflow artifact obot consumes (OBOT_SERVER_MDM_ASSET_SOURCE).
 # `make mdm` dispatches this workflow and downloads the artifact.
 #
 # release.yml calls this workflow with the tag version and publishes
@@ -117,10 +117,44 @@ jobs:
             dist/*.intunewin
           if-no-files-found: error
 
+  # macOS pkg on a macOS runner: pkgbuild and productbuild are macOS-only.
+  # The binary comes prebuilt from the binaries job. Signing a pkg takes a
+  # Developer ID Installer certificate, so it has its own secret alongside
+  # the Application certificate quill signs the binary with. PRs and forks
+  # publish an unsigned pkg, as the Windows installers already do.
+  macos:
+    needs: binaries
+    runs-on: macos-latest
+    env:
+      INSTALLER_SIGN_P12: ${{ github.event_name != 'pull_request' && secrets.INSTALLER_SIGN_P12 || '' }}
+      INSTALLER_SIGN_PASSWORD: ${{ secrets.INSTALLER_SIGN_PASSWORD }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: binaries
+          path: bin
+      # pkg.sh gates signing on INSTALLER_SIGN_P12 and notarization on the
+      # QUILL_NOTARY_* trio, so an unsigned run needs no separate path.
+      - name: Build the pkg
+        run: ./build/macos/pkg.sh "${VERSION}" bin/obot-sentry
+        env:
+          QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}
+          QUILL_NOTARY_KEY_ID: ${{ secrets.QUILL_NOTARY_KEY_ID }}
+          QUILL_NOTARY_KEY: ${{ secrets.QUILL_NOTARY_KEY }}
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-macos
+          path: dist/obot-sentry.pkg
+          if-no-files-found: error
+
   # Assemble dist/mdm-assets (build/mdm-assets.sh: manifest completion +
   # sanity checks + staging) and publish it as a workflow artifact.
   mdm-assets:
-    needs: [binaries, windows]
+    needs: [binaries, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -130,10 +164,15 @@ jobs:
         with:
           name: binaries
           path: dist
-      - name: Download installers
+      - name: Download Windows installers
         uses: actions/download-artifact@v8
         with:
           name: installers-windows
+          path: dist
+      - name: Download macOS installer
+        uses: actions/download-artifact@v8
+        with:
+          name: installers-macos
           path: dist
       - name: Assemble MDM assets
         run: ./build/mdm-assets.sh "${VERSION}"

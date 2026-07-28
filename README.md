@@ -51,7 +51,7 @@ already installed: the hook scheduled task registers a fixed `hook-install`
 argument list, so the MSI property (`ENFORCEMENT=1`) or a pushed `REG_DWORD` is
 the only way in.
 
-MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Preferences/com.obot.obot-sentry.plist` (fallback `/Library/Preferences/...`) on macOS.
+MDM stores: `HKLM\SOFTWARE\Obot\obot-sentry` on Windows; `/Library/Managed Preferences/ai.obot.obot-sentry.plist` (fallback `/Library/Preferences/...`) on macOS.
 
 `hook-install` writes the final MDM-owned executable path into every hook:
 `/usr/local/bin/obot-sentry` on macOS and
@@ -255,14 +255,24 @@ build/
       intunewin.ps1  INSTRUCTIONS.md.tmpl
     manual/              # manual channel: instructions for the MSI + exe
       INSTRUCTIONS.md.tmpl
-  macos/                 # macOS assets (universal binary, built in CI)
-    manual/              # manual channel: instructions for the standalone binary
+  macos/                 # the macOS installer (pkg) + the assets every channel shares
+    pkg.sh  distribution.xml  postinstall  uninstall.sh
+    ai.obot.obot-sentry.scan.plist          # LaunchAgent: per-user scan
+    ai.obot.obot-sentry.hook-install.plist  # LaunchDaemon: root hook convergence
+    ai.obot.obot-sentry.mobileconfig.tmpl   # deployment configuration (MDM channels)
+    ai.obot.obot-sentry.pppc.mobileconfig   # Full Disk Access grant (MDM channels)
+    intune/              # Intune channel: instructions
+      INSTRUCTIONS.md.tmpl
+    manual/              # manual channel: instructions for the pkg + bare binary
       INSTRUCTIONS.md.tmpl
 ```
 
 The installers are tenant-agnostic; per-tenant configuration (server URL
-+ an enrollment key created in obot) is applied at install time as MSI
-properties, so one installer serves every tenant. The Windows chain runs
++ an enrollment key created in obot) is applied at deploy time — as MSI
+properties on Windows, as a managed-preferences profile on macOS — so one
+installer serves every tenant. The macOS MDM channel and the DIY channel
+ship the *same* `dist/obot-sentry.pkg`; only the configuration surface
+around it differs. The Windows chain runs
 **on Windows**: [obot-sentry.wxs](build/windows/obot-sentry.wxs) via
 [WiX Toolset v4](https://docs.firegiant.com/wix/) (`dotnet tool install
 --global wix`), wrapped by Microsoft's
@@ -274,12 +284,45 @@ build\windows\intune\intunewin.ps1                         # dist\obot-sentry.in
 build/mdm-assets.sh 1.2.3                                  # dist/mdm-assets/ (any OS)
 ```
 
+The macOS chain runs **on macOS**: `pkgbuild`, `productbuild`, and
+`productsign` ship with the OS and `notarytool` with Xcode, so
+[pkg.sh](build/macos/pkg.sh) needs no extra tooling. It takes the universal
+binary only, and signing and notarization gate independently on credentials
+being present, so a plain local run still produces an installable (unsigned)
+pkg for smoke tests:
+
+```
+build/macos/pkg.sh 1.2.3 bin/obot-sentry   # dist/obot-sentry.pkg (version inside, name stable)
+```
+
+Signing reads `INSTALLER_SIGN_P12` (the p12 path or its base64 contents)
+and `INSTALLER_SIGN_PASSWORD`, importing the identity into a throwaway
+keychain for `productsign`. The p12 must carry a Developer ID **Installer**
+certificate — the only kind MDMs accept, and a separate certificate from the
+Application one quill signs the binary with — and must be legacy-encoded,
+because `security import` verifies SHA-1 MACs only and reports anything else
+as a wrong password. It must also bundle the intermediate that issued the
+leaf: `productsign` embeds only intermediates it finds in the keychain, and
+macOS ships the G1 Developer ID intermediate but not G2. Mint one from the
+certificate and key Apple issued, fetching the intermediate its issuer line
+names:
+
+```
+openssl x509 -inform DER -in developerID_installer.cer -out installer-cert.pem
+openssl x509 -in installer-cert.pem -noout -issuer   # which intermediate to fetch
+curl -sSfL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer |
+  openssl x509 -inform DER -out DeveloperIDG2CA.pem
+openssl pkcs12 -export -legacy -macalg sha1 -inkey privatekey.key \
+  -in installer-cert.pem -certfile DeveloperIDG2CA.pem -out installer.p12
+```
+
 CI (`build.yaml`) runs the same chain — a Linux job builds the binaries
 with GoReleaser (`.goreleaser.yaml`): the Windows exe plus the macOS
 universal (amd64+arm64) binary, signed and notarized with
-[quill](https://github.com/anchore/quill) without a macOS runner; the
-Windows runner packages the MSI — and `make mdm` dispatches that
-workflow on your fork and downloads the assembled `dist/mdm-assets`.
+[quill](https://github.com/anchore/quill) without a macOS runner; a
+Windows runner packages the MSI and a macOS runner the pkg — and
+`make mdm` dispatches that workflow on your fork and downloads the
+assembled `dist/mdm-assets`.
 
 `mdm-assets.sh` produces the tree obot consumes: the platform installers
 and instruction templates plus one `manifest.json`. The manifest is the
@@ -299,12 +342,21 @@ Authenticode there. The macOS universal binary is Developer ID-signed
 and notarized via quill when the `QUILL_*` secrets are available (the
 same secrets obot's release workflow uses); PRs and forks fall back to
 a dry run with an ad-hoc signature.
-Obot reads the assembled tree via `OBOT_SERVER_MDM_ASSETS_PATH`.
+Obot reads the assembled tree via `OBOT_SERVER_MDM_ASSET_SOURCE`, which
+takes a local directory, a tar archive, or an HTTP(S) tarball URL — so
+pointing it at `dist/mdm-assets` serves a local build.
 
 | Platform | installer | scheduling | tenant config |
 |---|---|---|---|
 | Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (logon + hourly) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
-| Manual (macOS) | universal binary installed to `/usr/local/bin` | none — run `obot-sentry scan --submit --force` manually | `OBOT_SENTRY_*` environment variables |
+| Intune (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + hourly) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
+| Manual (Windows) | `.msi`, or the bare exe | as above for the MSI | MSI properties, or `OBOT_SENTRY_*` environment variables |
+| Manual (macOS) | `.pkg`, or the bare universal binary | as above for the pkg | `sudo defaults write /Library/Preferences/ai.obot.obot-sentry`, or `OBOT_SENTRY_*` environment variables |
+
+The macOS pkg is identical across both channels — the Intune channel adds a
+configuration profile and a PPPC (Full Disk Access) profile, which macOS only
+honors from a user-approved MDM, so the DIY channel grants that access by hand
+instead.
 
 ## Development
 

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+	PPPC profile granting obot-sentry Full Disk Access. The scan and
+	hook-install launchd jobs run in the background where TCC cannot
+	prompt: without this grant, reads and writes under TCC-protected
+	user paths (~/Desktop, ~/Documents, ~/Downloads, parts of
+	~/Library) silently fail. MDM channels deploy it as-is alongside
+	the pkg; TCC payloads are only honored from a user-approved
+	(UAMDM/ADE) MDM, so the DIY channel instead grants Full Disk
+	Access manually in System Settings.
+
+	The CodeRequirement is the designated requirement of the release
+	binary (codesign -dr - obot-sentry): identifier "obot-sentry",
+	Developer ID chain, team K5HKMU4T9S (Acorn Labs, Inc.). Signing is
+	centralized, so the profile is identical for every tenant - but it
+	will not match ad-hoc-signed dev builds, only release artifacts.
+
+	UUIDs are stable across releases (MDMs dedupe on PayloadIdentifier).
+	When editing, bump PayloadVersion on the inner and outer payloads so
+	devices pick up the change on the next profile sync.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadDescription</key>
+			<string>Grants Obot Sentry Full Disk Access so background scans and hook convergence can reach TCC-protected paths.</string>
+			<key>PayloadDisplayName</key>
+			<string>Obot Sentry - Privacy Preferences</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.obot.obot-sentry.pppc.tcc</string>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadUUID</key>
+			<string>06EFBEC9-A8B0-4009-99C4-AAE194587EE0</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>Services</key>
+			<dict>
+				<key>SystemPolicyAllFiles</key>
+				<array>
+					<dict>
+						<key>Identifier</key>
+						<string>/usr/local/bin/obot-sentry</string>
+						<key>IdentifierType</key>
+						<string>path</string>
+						<key>CodeRequirement</key>
+						<string>identifier "obot-sentry" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[subject.OU] = K5HKMU4T9S</string>
+						<key>Allowed</key>
+						<true/>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Grants the Obot Sentry binary at /usr/local/bin/obot-sentry Full Disk Access. Deploy as-is: the code requirement pins Obot's Developer ID signature, so no other binary satisfies it.</string>
+	<key>PayloadDisplayName</key>
+	<string>Obot Sentry - Full Disk Access</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.obot.obot-sentry.pppc</string>
+	<key>PayloadOrganization</key>
+	<string>Obot</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>D31534F3-E51E-4833-93B3-508326A1F1F8</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

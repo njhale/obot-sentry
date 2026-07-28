@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	productbuild layout for the distribution-style (product archive) pkg.
+	Distribution style is required: Intune's macOS PKG app type accepts
+	signed product archives, not bare component pkgs. The version is
+	substituted by pkg.sh. The binary is universal, so both architectures
+	are declared.
+-->
+<installer-gui-script minSpecVersion="2">
+	<title>Obot Sentry</title>
+	<options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+	<domains enable_localSystem="true"/>
+	<choices-outline>
+		<line choice="default">
+			<line choice="ai.obot.obot-sentry"/>
+		</line>
+	</choices-outline>
+	<choice id="default"/>
+	<choice id="ai.obot.obot-sentry" visible="false">
+		<pkg-ref id="ai.obot.obot-sentry"/>
+	</choice>
+	<pkg-ref id="ai.obot.obot-sentry" version="${VERSION}" onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>
