@@ -84,41 +84,27 @@ device identity and scan state live outside the package.
 
 ## Uninstall
 
-Remove the hooks first: they invoke `obot-sentry` by path, so removing the agent
-while its hooks are still configured leaves each coding agent trying to run a
-command that no longer exists.
+Uninstall in this order: remove the hooks first, then the agent. Nothing in step
+2 touches the hook configuration, and hooks that outlive the binary leave each
+coding agent invoking a command that no longer exists.
 
 ### 1. Remove the hooks
 
-`hook-install` has no uninstall command, so removing the app stops future
-convergence but leaves the hooks already written into each user's agent
-configuration. Removing them is a per-user, per-device edit that Intune cannot
-make on its own; run it as a shell script, or have each user run it.
-
-Every entry Obot Sentry writes is marked with `--managed-by obot-sentry`. Find
-the files that still carry one:
+While the app is still installed, run this as a **shell script** (*Devices >
+Scripts > Add > macOS*) with **Run script as signed-in user** set to **No**,
+while the target user is the active console user:
 
 ```sh
-grep -rl 'managed-by obot-sentry' \
-  "$HOME/.claude" "$HOME/.copilot" \
-  "$HOME/Library/Application Support/Code/User" \
-  /etc/codex "/Library/Application Support/Cursor" 2>/dev/null
+/usr/local/bin/obot-sentry hook-uninstall
 ```
 
-- `$HOME/.copilot/hooks/obot-sentry.json` is written only by Obot Sentry —
-  delete the whole file.
-- `~/.claude/settings.json`, `/etc/codex/requirements.toml`, and
-  `/Library/Application Support/Cursor/hooks.json` are shared with your own
-  configuration — delete only the hook entries whose command contains
-  `--managed-by obot-sentry` (the last two are machine-wide and need `sudo`).
-- In `~/Library/Application Support/Code/User/settings.json`, remove the keys
-  Obot Sentry added under `chat.hookFilesLocations` (`~/.copilot/hooks`,
-  `.claude/settings.json`, `.claude/settings.local.json`,
-  `~/.claude/settings.json`).
+This removes every hook entry marked `--managed-by obot-sentry` from the
+machine-wide files and the active user's files while preserving third-party
+hooks. Repeat it for each user on shared Macs. It deliberately preserves
+unmarked Codex feature pins and VS Code `chat.hookFilesLocations` values; remove
+those separately if desired.
 
-The per-user files exist once per signed-in user, so repeat for each user on a
-shared Mac. Restart Claude Code, Codex, VS Code, and Cursor afterward to drop
-the hooks.
+Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
 
 ### 2. Remove the agent
 

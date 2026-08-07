@@ -4,11 +4,11 @@
 # user's scan state. Idempotent, and harmless on a Mac where Obot Sentry
 # was never installed.
 #
-# It deliberately leaves the local-agent audit hooks alone. Those live in
-# configuration files shared with the user's own hooks, so only the entries
-# marked `--managed-by obot-sentry` may go, which needs a per-file edit.
-# Remove them first (see INSTRUCTIONS.md): hooks that outlive the binary
-# leave each coding agent invoking a command that no longer exists.
+# It deliberately leaves the local-agent audit hooks alone: `obot-sentry
+# hook-uninstall` owns that, and it targets the active console user, so it
+# runs once per user rather than once per Mac. Run it first - hooks that
+# outlive the binary leave each coding agent invoking a command that no
+# longer exists.
 #
 # Usage: sudo bash uninstall.sh
 set -euo pipefail
