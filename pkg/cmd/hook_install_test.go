@@ -27,6 +27,9 @@ func TestHookInstallVisibleInRootHelp(t *testing.T) {
 	if !slices.Contains(cmds, "hook-install") {
 		t.Fatalf("expected hook-install command in root help, got %v", cmds)
 	}
+	if !slices.Contains(cmds, "hook-uninstall") {
+		t.Fatalf("expected hook-uninstall command in root help, got %v", cmds)
+	}
 	// The audit plumbing stays hidden even though hook-install (whose
 	// description mentions "audit") is public.
 	if slices.Contains(cmds, "audit") {
@@ -71,27 +74,32 @@ func TestHookInstallRejectsPositionalArgs(t *testing.T) {
 	}
 }
 
-// TestHookInstallUnsupportedPlatformMakesNoChanges exercises the command on the
-// test host. On Linux (the CI/dev platform for this suite) hook-install must
-// report an unsupported-platform error and write nothing to stdout.
+// TestHookCommandsUnsupportedPlatformMakeNoChanges exercises the commands on
+// the test host. On Linux (the CI/dev platform for this suite) each command
+// must identify itself in the unsupported-platform error and write nothing to
+// stdout.
 // This test is skipped when not run on Linux
-func TestHookInstallUnsupportedPlatformMakesNoChanges(t *testing.T) {
+func TestHookCommandsUnsupportedPlatformMakeNoChanges(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping test on non-Linux platform")
 	}
 
-	root := New()
-	var stdout, stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"hook-install"})
+	for _, command := range []string{"hook-install", "hook-uninstall"} {
+		t.Run(command, func(t *testing.T) {
+			root := New()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs([]string{command})
 
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected hook-install to error without a supported platform and privilege")
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("expected no stdout when preflight fails, got %q", stdout.String())
+			err := root.Execute()
+			if err == nil || !strings.Contains(err.Error(), "obot-sentry "+command) {
+				t.Fatalf("err = %v, want unsupported-platform error for %s", err, command)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected no stdout when preflight fails, got %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -198,5 +206,32 @@ func TestHookInstallFlagReachesTheInstaller(t *testing.T) {
 				t.Errorf("installer.Enforce = %v, want %v", installer.Enforce, tt.want)
 			}
 		})
+	}
+}
+
+func TestHookUninstallReachesInstaller(t *testing.T) {
+	t.Setenv(envEnforcementEnabled, "true")
+	var installer *hookinstall.Installer
+	hook := &HookUninstall{
+		newInstaller: func() *hookinstall.Installer {
+			installer = &hookinstall.Installer{
+				GOOS:                "darwin",
+				Privilege:           func() error { return nil },
+				ResolveUser:         func() (*hookinstall.TargetUser, error) { return &hookinstall.TargetUser{HomeDir: t.TempDir()}, nil },
+				ResolveDestinations: func(string) []hookinstall.Destination { return nil },
+			}
+			return installer
+		},
+	}
+
+	cmd := obotcmd.Command(hook)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if installer == nil || !installer.Uninstall {
+		t.Fatalf("installer = %+v, want uninstall mode", installer)
+	}
+	if installer.Enforce {
+		t.Fatal("uninstall unexpectedly enabled enforcement")
 	}
 }
