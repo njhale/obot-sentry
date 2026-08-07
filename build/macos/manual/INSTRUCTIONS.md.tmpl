@@ -5,12 +5,11 @@ Install Obot Sentry on a Mac without an MDM. This download contains:
 - `obot-sentry.pkg` — the installer (version {{.obotSentryVersion}}). Installs
   the agent and schedules scans and hook convergence, exactly as the MDM
   channels do.
-- `obot-sentry` — the bare universal binary, for running a one-off scan without
-  installing anything.
+- `obot-sentry` — the bare universal binary, for installing by hand instead.
 
 Everything below needs an administrator account.
 
-## Install
+## Installer (pkg)
 
 1. Write the deployment configuration, replacing `REPLACE_WITH_ENROLLMENT_KEY`
    with your enrollment key. This is the same preferences domain an MDM profile
@@ -81,26 +80,63 @@ Everything below needs an administrator account.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
   identity shared by every user on the Mac is stored.
 
-## Run a scan or install hooks yourself
+## Standalone binary (Alternate)
 
-The scheduled jobs do both on their own; run them by hand to see the result
-immediately:
+Install `obot-sentry` by hand to run one-off scans or install hooks yourself.
+Use this to try Obot Sentry without the automated scanning and hook maintenance
+the pkg sets up — nothing is scheduled, so every scan is one you run.
+
+1. Install the binary. `hook-install` writes this exact path into every hook and
+   refuses to run if nothing is there, so the location is not optional:
+
+   ```sh
+   sudo install -m 755 obot-sentry /usr/local/bin/obot-sentry
+   ```
+
+2. Configure Obot Sentry, replacing `REPLACE_WITH_ENROLLMENT_KEY` with your
+   enrollment key:
+
+   ```sh
+   sudo defaults write /Library/Preferences/ai.obot.obot-sentry ServerURL -string "{{.serverURL}}"
+   sudo defaults write /Library/Preferences/ai.obot.obot-sentry EnrollmentKey -string "REPLACE_WITH_ENROLLMENT_KEY"
+   sudo defaults write /Library/Preferences/ai.obot.obot-sentry ScanIntervalMinutes -int {{.scanIntervalMinutes}}
+   sudo defaults write /Library/Preferences/ai.obot.obot-sentry EnforcementEnabled -bool {{if .enforcementEnabled}}true{{else}}false{{end}}
+   ```
+
+3. Enroll the device:
+
+   ```sh
+   sudo obot-sentry enroll
+   ```
+
+   Enroll verifies the configuration and prints the device ID this Mac reports
+   as.
+
+### Run a scan
 
 ```sh
 obot-sentry scan --submit --force
-sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
 
-Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits.
+Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits. The same two commands work after a pkg install, where the launchd jobs also run them on their own.
 
-To scan a Mac without installing anything, skip the steps above and run the bare
-binary with the configuration in its environment:
+To scan a Mac without installing anything at all, run the downloaded binary with
+the configuration in its environment — this needs no root and writes nothing:
 
 ```sh
 OBOT_SENTRY_SERVER_URL="{{.serverURL}}" \
   OBOT_SENTRY_ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" \
   ./obot-sentry scan --submit
 ```
+
+### Install hooks
+
+```sh
+sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
+```
+
+Hooks are installed once and stay as written. Without the pkg's LaunchDaemon
+nothing re-checks them, so rerun this after a change to bring them back.
 
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
@@ -124,9 +160,8 @@ themselves are removed.
 {{end}}
 ## Uninstall
 
-Uninstall in this order: remove the hooks first, then the agent. Nothing in step
-2 touches the hook configuration, and hooks that outlive the binary leave each
-coding agent invoking a command that no longer exists.
+Uninstall in this order: remove the hooks first, then the agent. Step 2 runs
+`hook-uninstall` before it removes anything, so the hooks go either way.
 
 ### 1. Remove the hooks
 
@@ -148,14 +183,15 @@ Codex, VS Code, and Cursor afterward to drop the hooks.
 
 ### 2. Remove the agent
 
-`uninstall.sh` unloads both launchd jobs and removes the binary, the plists, the
-package receipt, the configuration from step 1, the shared device identity, and
-every user's scan state:
+`uninstall.sh` runs `hook-uninstall` first, then unloads both launchd jobs and
+removes the binary, the plists, the package receipt, the configuration, the
+shared device identity, and every user's scan state. It covers either install
+path — the parts a standalone install never created are skipped:
 
 ```sh
 sudo bash uninstall.sh
 ```
 
 Then remove `/usr/local/bin/obot-sentry` from Full Disk Access in System
-Settings — the grant you added in step 4 is the one thing the script cannot
+Settings — the grant you added by hand is the one thing the script cannot
 revoke.

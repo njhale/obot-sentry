@@ -84,9 +84,8 @@ device identity and scan state live outside the package.
 
 ## Uninstall
 
-Uninstall in this order: remove the hooks first, then the agent. Nothing in step
-2 touches the hook configuration, and hooks that outlive the binary leave each
-coding agent invoking a command that no longer exists.
+Uninstall in this order: remove the hooks first, then the agent. Step 2 runs
+`hook-uninstall` before it removes anything, so the hooks go either way.
 
 ### 1. Remove the hooks
 
@@ -110,10 +109,10 @@ Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
 
 Unassign the app and both configuration profiles, then run `uninstall.sh` on
 each device as a **shell script** (*Devices > Scripts > Add > macOS*), leaving
-**Run script as signed-in user** set to **No**. It unloads both launchd jobs and
-removes the binary, the plists, the package receipt, the shared device identity,
-and every user's scan state. It is idempotent, so a device that already ran it
-is unaffected.
+**Run script as signed-in user** set to **No**. It runs `hook-uninstall` first,
+then unloads both launchd jobs and removes the binary, the plists, the package
+receipt, the shared device identity, and every user's scan state. It is
+idempotent, so a device that already ran it is unaffected.
 
 A script is the only route: Intune's PKG app type has no **Uninstall**
 assignment, and an app the Intune agent installed stays on the device when that
