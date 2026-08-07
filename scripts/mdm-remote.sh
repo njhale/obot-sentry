@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
 # Build the MDM assets remotely: dispatch the build.yaml workflow on the
-# current branch of the repo `origin` points at (your fork), wait for it
-# to finish, and download the assembled assets into dist/mdm-assets.
+# current branch of the repo a git remote points at, wait for it to
+# finish, and download the assembled assets into dist/mdm-assets.
+#
+# Defaults to `origin` (your fork), which produces unsigned installers:
+# forks hold none of the signing secrets. Point it at the remote that
+# does to get signed, notarized output:
+#
+#     git push upstream "$(git branch --show-current)"
+#     MDM_REMOTE=upstream make mdm
 #
 # Usage: scripts/mdm-remote.sh [version]   # version numeric x.y.z, optional
 set -euo pipefail
 
 version="${1:-}"
+remote="${MDM_REMOTE:-origin}"
 branch="$(git branch --show-current)"
 if [[ -z "$branch" ]]; then
 	echo "detached HEAD; check out a branch first" >&2
 	exit 1
 fi
+if ! git remote get-url "$remote" >/dev/null 2>&1; then
+	echo "no such git remote: $remote" >&2
+	exit 1
+fi
 
-# Pin every gh call to the repo `origin` points at — gh's own default
+# Pin every gh call to the repo this remote points at — gh's own default
 # repo is often the upstream, which would 404 (no such workflow) or
 # dispatch against the wrong repo.
-repo="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
+repo="$(git remote get-url "$remote" | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 
 # workflow_dispatch runs the workflow file from the pushed ref, so the
-# branch (with .github/workflows/build.yaml on it) must be on origin.
-if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-	echo "branch $branch is not pushed to origin ($repo); commit and push it first" >&2
+# branch (with .github/workflows/build.yaml on it) must be on the remote.
+if ! git ls-remote --exit-code --heads "$remote" "$branch" >/dev/null; then
+	echo "branch $branch is not pushed to $remote ($repo); commit and push it first" >&2
 	exit 1
 fi
 

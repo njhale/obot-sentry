@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+	Submits a device scan. Installed at /Library/LaunchAgents so launchd
+	runs it in every signed-in user's session, as that user, which is what
+	attributes scans per user. RunAtLoad gives fresh sessions their first
+	scan at login; StartInterval is a cheap poll, since obot-sentry
+	throttles real submissions to the MDM-configured ScanIntervalMinutes.
+	It matches the 15-minute floor that value is clamped to, so no tick is
+	structurally incapable of submitting. launchd never starts a job that
+	is still running, so ticks cannot stack.
+
+	stdout/stderr intentionally unset - launchd routes to the unified log:
+	    log stream --predicate 'process == "obot-sentry"'
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.obot.obot-sentry.scan</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/obot-sentry</string>
+		<string>scan</string>
+		<string>--submit</string>
+		<string>--quiet</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>StartInterval</key>
+	<integer>900</integer>
+</dict>
+</plist>

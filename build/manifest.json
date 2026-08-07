@@ -49,6 +49,21 @@
       ]
     },
     {
+      "platform": "intune",
+      "os": "macos",
+      "osLabel": "macOS",
+      "description": "Deploy Obot Sentry to macOS devices with Microsoft Intune",
+      "suggestedName": "macOS Devices",
+      "instructions": "macos/intune/INSTRUCTIONS.md.tmpl",
+      "assets": [
+        "macos/obot-sentry.pkg",
+        "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
+        "macos/ai.obot.obot-sentry.pppc.mobileconfig",
+        "macos/uninstall.sh",
+        "macos/intune/INSTRUCTIONS.md.tmpl"
+      ]
+    },
+    {
       "platform": "manual",
       "os": "windows",
       "osLabel": "Windows",
@@ -69,7 +84,9 @@
       "suggestedName": "macOS Devices",
       "instructions": "macos/manual/INSTRUCTIONS.md.tmpl",
       "assets": [
+        "macos/obot-sentry.pkg",
         "macos/manual/obot-sentry",
+        "macos/uninstall.sh",
         "macos/manual/INSTRUCTIONS.md.tmpl"
       ]
     }

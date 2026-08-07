@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+	Converges the managed local-agent audit hooks. Runs as root: it writes
+	machine-scope agent configuration, and the per-user files it writes
+	belong to the user at /dev/console. With nobody signed in it exits with
+	an error and the next tick converges. RunAtLoad covers boot and
+	installation; StartInterval picks up drift and console-user switches.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.obot.obot-sentry.hook-install</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/obot-sentry</string>
+		<string>hook-install</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>StartInterval</key>
+	<integer>3600</integer>
+</dict>
+</plist>
