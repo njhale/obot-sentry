@@ -55,9 +55,24 @@ Everything below needs an administrator account.
 5. Confirm both jobs are loaded:
 
    ```sh
-   launchctl print "gui/$(id -u)/ai.obot.obot-sentry.scan" | head -5
-   sudo launchctl print system/ai.obot.obot-sentry.hook-install | head -5
+   launchctl print "gui/$(id -u)/ai.obot.obot-sentry.scan" | grep -E 'state|program|runs|last exit code'
+   sudo launchctl print system/ai.obot.obot-sentry.hook-install | grep -E 'state|program|runs|last exit code'
    ```
+
+   Four lines worth reading in each:
+
+   - `state = not running` is the healthy idle state. Both jobs run on a
+     schedule and exit rather than staying resident, so `running` is only what
+     you catch mid-run.
+   - `program = /usr/local/bin/obot-sentry` confirms the job points at the
+     installed binary.
+   - `runs` counts completed launches. It climbs on schedule; stuck at 0 means
+     the job is loaded but has never fired.
+   - `last exit code = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the values from step 1.
+
+   `Could not find service` instead means that job never loaded; reinstall the
+   pkg.
 
    The device appears in Obot as its first scan arrives. To watch the agent
    work:
@@ -118,16 +133,7 @@ the pkg sets up — nothing is scheduled, so every scan is one you run.
 obot-sentry scan --submit --force
 ```
 
-Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits. The same two commands work after a pkg install, where the launchd jobs also run them on their own.
-
-To scan a Mac without installing anything at all, run the downloaded binary with
-the configuration in its environment — this needs no root and writes nothing:
-
-```sh
-OBOT_SENTRY_SERVER_URL="{{.serverURL}}" \
-  OBOT_SENTRY_ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" \
-  ./obot-sentry scan --submit
-```
+Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits. The same command works after a pkg install, where the launchd jobs also run it on their own.
 
 ### Install hooks
 
@@ -160,38 +166,21 @@ themselves are removed.
 {{end}}
 ## Uninstall
 
-Uninstall in this order: remove the hooks first, then the agent. Step 2 runs
-`hook-uninstall` before it removes anything, so the hooks go either way.
-
-### 1. Remove the hooks
-
-Remove every Obot Sentry-managed hook while preserving third-party hooks:
-
-```sh
-sudo obot-sentry hook-uninstall
-```
-
-The command removes only entries marked `--managed-by obot-sentry`; it does not
-delete files or change unmarked supporting settings. If desired, manually remove
-the Codex `[features]` pins `hooks = true` and
-`non_prefixed_mcp_tool_names = false`, and remove the Obot-added values under VS
-Code's `chat.hookFilesLocations`.
-
-The per-user files (`~/.claude`, `~/.copilot`, VS Code settings) exist once per
-signed-in user, so repeat for each user on a shared Mac. Restart Claude Code,
-Codex, VS Code, and Cursor afterward to drop the hooks.
-
-### 2. Remove the agent
-
-`uninstall.sh` runs `hook-uninstall` first, then unloads both launchd jobs and
-removes the binary, the plists, the package receipt, the configuration, the
-shared device identity, and every user's scan state. It covers either install
-path — the parts a standalone install never created are skipped:
+`uninstall.sh` removes every Obot Sentry-managed hook, then unloads both launchd
+jobs and removes the binary, the plists, the package receipt, the configuration,
+the shared device identity, and every user's scan state. It covers either
+install path — the parts a standalone install never created are skipped:
 
 ```sh
 sudo bash uninstall.sh
 ```
 
-Then remove `/usr/local/bin/obot-sentry` from Full Disk Access in System
-Settings — the grant you added by hand is the one thing the script cannot
-revoke.
+Hook removal preserves third-party hooks and only touches entries marked
+`--managed-by obot-sentry`; it leaves unmarked supporting settings alone. Remove
+those by hand if you want them gone: the Codex `[features]` pins `hooks = true`
+and `non_prefixed_mcp_tool_names = false`, and the Obot-added values under VS
+Code's `chat.hookFilesLocations`.
+
+Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks, and
+remove `/usr/local/bin/obot-sentry` from Full Disk Access in System Settings —
+the grant you added by hand is the one thing the script cannot revoke.
