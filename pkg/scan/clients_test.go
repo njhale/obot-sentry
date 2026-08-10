@@ -158,15 +158,6 @@ func TestScanners_Smoke(t *testing.T) {
 			},
 		},
 		{
-			name:      "windsurf stdio",
-			client:    "windsurf",
-			serverNm:  "github",
-			transport: "stdio",
-			files: map[string]string{
-				".codeium/windsurf/mcp_config.json": `{"mcpServers":{"github":{"command":"npx","args":["-y","x"]}}}`,
-			},
-		},
-		{
 			name:      "zed stdio",
 			client:    "zed",
 			serverNm:  "github",

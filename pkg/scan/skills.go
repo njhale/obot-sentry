@@ -110,12 +110,10 @@ var skillDirs = []Location{
 // Matched only at the root of a home, and only after skillDirs.
 var skillTrees = []Location{
 	{".claude", Home, []string{"claude_code"}},
-	{".codeium", Home, []string{"windsurf"}},
 	{".codex", Home, []string{"codex"}},
 	{".cursor", Home, []string{"cursor"}},
 	{".hermes", Home, []string{"hermes"}},
 	{".skillport", Home, []string{"skillport"}},
-	{".windsurf", Home, []string{"windsurf"}},
 }
 
 // readersOfTree returns the clients that read the skill tree rel sits

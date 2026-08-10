@@ -170,18 +170,6 @@ func clients(platform string) []Client {
 			Config: []string{".vscode", path.Dir(vscodeUserDir(platform))},
 		},
 		{
-			Name: "windsurf",
-			Installed: []string{
-				"/Applications/Windsurf.app",
-				"Applications/Windsurf.app",
-				`C:\Program Files\Windsurf`,
-				"AppData/Local/Programs/Windsurf",
-				".codeium/windsurf/installation_id",
-				".codeium/windsurf/database",
-			},
-			Config: []string{".windsurf", ".codeium"},
-		},
-		{
 			Name: "zed",
 			Installed: []string{
 				"/Applications/Zed.app",

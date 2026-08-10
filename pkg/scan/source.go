@@ -72,9 +72,6 @@ func sources(platform string) []Source {
 		{path.Join(vscodeUserDir(platform), "mcp.json"), Home, vscodeServers},
 		{".vscode/mcp.json", Project, vscodeServers},
 
-		{windsurfGlobalConfigRel, Home, windsurfServers},
-		{".windsurf/mcp_config.json", Project, windsurfServers},
-
 		{zedSettingsRel(platform), Home, zedHomeServers},
 		{".zed/settings.json", Project, zedProjectServers},
 	}
