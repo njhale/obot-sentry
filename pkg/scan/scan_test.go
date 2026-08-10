@@ -83,7 +83,7 @@ func namedSkill(name string) string {
 }
 
 // TestSkillDirs_ReadersResolve is the guard against the drift that made
-// antigravity and skillport unreportable: they appeared in the skills
+// antigravity unreportable: it appeared in the skills
 // table but had no client, so nothing could ever detect them and their
 // rows could only be conjured from a skill file.
 //

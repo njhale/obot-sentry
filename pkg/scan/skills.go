@@ -91,7 +91,6 @@ var skillDirs = []Location{
 	{".gemini/config/skills", Home, []string{"antigravity"}},
 	{".github/skills", Project, []string{"vscode"}},
 	{".opencode/skills", Project, []string{"opencode"}},
-	{".skillport/skills", Home, []string{"skillport"}},
 }
 
 // skillTrees are directories where a SKILL.md *anywhere* below counts,
@@ -113,7 +112,6 @@ var skillTrees = []Location{
 	{".codex", Home, []string{"codex"}},
 	{".cursor", Home, []string{"cursor"}},
 	{".hermes", Home, []string{"hermes"}},
-	{".skillport", Home, []string{"skillport"}},
 }
 
 // readersOfTree returns the clients that read the skill tree rel sits

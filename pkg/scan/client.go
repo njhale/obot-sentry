@@ -153,11 +153,6 @@ func clients(platform string) []Client {
 			Config: []string{".config/opencode"},
 		},
 		{
-			Name:      "skillport",
-			Installed: []string{".skillport/skills"},
-			Config:    []string{".skillport"},
-		},
-		{
 			Name: "vscode",
 			Installed: []string{
 				"/Applications/Visual Studio Code.app",
