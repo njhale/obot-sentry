@@ -36,11 +36,11 @@ var walkSkipDirs = map[string]bool{
 	"temp":         true,
 }
 
-// projectHit is one matched config file paired with the scanner that
-// owns it.
+// projectHit is one matched config file paired with the source that
+// describes it.
 type projectHit struct {
-	path    string
-	scanner Scanner
+	path   string
+	source Source
 }
 
 // walk descends the root's fs once, matching every file against every
@@ -58,19 +58,15 @@ type projectHit struct {
 //
 // Honors ctx: if cancelled, the walk aborts early and returns whatever
 // was matched so far.
-func walk(ctx context.Context, s *state, scanners []Scanner, skipPaths map[string]bool) ([]projectHit, []string) {
+func walk(ctx context.Context, s *state, srcs []Source, skipPaths map[string]bool) ([]projectHit, []string) {
 	if s.fsys == nil {
 		return nil, nil
 	}
 
-	type matcher struct {
-		suffix  string
-		scanner Scanner
-	}
-	var matchers []matcher
-	for _, sc := range scanners {
-		for _, suffix := range sc.ProjectConfigs() {
-			matchers = append(matchers, matcher{suffix: suffix, scanner: sc})
+	var matchers []Source
+	for _, src := range srcs {
+		if src.Scope.has(Project) {
+			matchers = append(matchers, src)
 		}
 	}
 
@@ -111,8 +107,8 @@ func walk(ctx context.Context, s *state, scanners []Scanner, skipPaths map[strin
 			return nil
 		}
 		for _, m := range matchers {
-			if rel == m.suffix || strings.HasSuffix(rel, "/"+m.suffix) {
-				hits = append(hits, projectHit{path: rel, scanner: m.scanner})
+			if rel == m.Path || strings.HasSuffix(rel, "/"+m.Path) {
+				hits = append(hits, projectHit{path: rel, source: m})
 				return nil
 			}
 		}

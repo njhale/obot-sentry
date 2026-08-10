@@ -38,20 +38,37 @@ var skillExtensions = map[string]bool{
 	".ts":  true,
 }
 
-// skillDirRule is one documented skills directory: a directory whose
-// immediate child directories are skills (<dir>/<name>/SKILL.md), and
-// the clients that discover skills there. The same directory name can
-// be read by different client sets depending on whether it sits at the
-// root of a home directory (global) or inside a project (project);
-// nil means the location is not documented for that scope.
-type skillDirRule struct {
-	dir     string
-	global  []string
-	project []string
+// Scope is where a Location applies: at the root of a scanned home, or
+// inside a project anywhere the walk reaches. A location documented for
+// both scopes with the same readers sets both bits; one whose readers
+// differ per scope gets an entry each.
+type Scope uint8
+
+const (
+	Home Scope = 1 << iota
+	Project
+)
+
+func (s Scope) has(other Scope) bool { return s&other != 0 }
+
+// Location is a place artifacts live — a path whose layout is a
+// documented convention — and the clients that read it.
+//
+// Locations are keyed by path rather than by client because the
+// conventions are increasingly client-neutral: ~/.agents/skills is read
+// by four clients and owned by none. Attribution is a property of where
+// an artifact was found, not of any one client, and Readers may name
+// clients that turn out not to be installed — build intersects them
+// with what detection found.
+type Location struct {
+	Path    string
+	Scope   Scope
+	Readers []string
 }
 
-// skillDirRules captures each client's documented skill discovery
-// paths (client sets are sorted):
+// skillDirs are the documented skills directories: a directory whose
+// immediate child directories are skills (<dir>/<name>/SKILL.md), and
+// the clients that discover skills there. Readers are sorted.
 //
 //   - Claude Code: https://code.claude.com/docs/en/skills
 //   - Cursor: https://cursor.com/docs/skills.md
@@ -59,51 +76,61 @@ type skillDirRule struct {
 //   - OpenCode: https://opencode.ai/docs/skills/
 //   - VS Code / Copilot: https://code.visualstudio.com/docs/agent-customization/agent-skills
 //   - Antigravity: https://antigravity.google/docs/skills
-//
-// Shared directories are the reason a skill carries a client *set*: a
-// skill under ~/.agents/skills is discoverable by every client that
-// respects the .agents convention, not by one owner.
-var skillDirRules = []skillDirRule{
-	{dir: ".agent/skills", // legacy Antigravity layout
-		project: []string{"antigravity"}},
-	{dir: ".agents/skills",
-		global:  []string{"codex", "cursor", "opencode", "vscode"},
-		project: []string{"antigravity", "codex", "cursor", "opencode", "vscode"}},
-	{dir: ".claude/skills",
-		global:  []string{"claude_code", "cursor", "opencode", "vscode"},
-		project: []string{"claude_code", "cursor", "opencode", "vscode"}},
-	{dir: ".codex/skills", // Cursor compatibility path; current Codex reads .agents/skills
-		global:  []string{"cursor"},
-		project: []string{"cursor"}},
-	{dir: ".config/opencode/skills",
-		global: []string{"opencode"}},
-	{dir: ".copilot/skills",
-		global: []string{"vscode"}},
-	{dir: ".cursor/skills",
-		global:  []string{"cursor"},
-		project: []string{"cursor"}},
-	{dir: ".gemini/config/skills",
-		global: []string{"antigravity"}},
-	{dir: ".github/skills",
-		project: []string{"vscode"}},
-	{dir: ".opencode/skills",
-		project: []string{"opencode"}},
-	{dir: ".skillport/skills",
-		global: []string{"skillport"}},
+var skillDirs = []Location{
+	// Legacy Antigravity layout.
+	{".agent/skills", Project, []string{"antigravity"}},
+	// Antigravity reads .agents/skills in a project but not at home.
+	{".agents/skills", Home, []string{"codex", "cursor", "opencode", "vscode"}},
+	{".agents/skills", Project, []string{"antigravity", "codex", "cursor", "opencode", "vscode"}},
+	{".claude/skills", Home | Project, []string{"claude_code", "cursor", "opencode", "vscode"}},
+	// Cursor compatibility path; current Codex reads .agents/skills.
+	{".codex/skills", Home | Project, []string{"cursor"}},
+	{".config/opencode/skills", Home, []string{"opencode"}},
+	{".copilot/skills", Home, []string{"vscode"}},
+	{".cursor/skills", Home | Project, []string{"cursor"}},
+	{".gemini/config/skills", Home, []string{"antigravity"}},
+	{".github/skills", Project, []string{"vscode"}},
+	{".opencode/skills", Project, []string{"opencode"}},
+	{".skillport/skills", Home, []string{"skillport"}},
 }
 
-// homeClientTool maps the first home-relative path component to a
-// client, used as a fallback to attribute SKILL.md files found
-// anywhere under a client's own dot-directory but outside a documented
-// skills directory (e.g. .hermes/skills/official/apple/…/SKILL.md).
-var homeClientTool = map[string]string{
-	".claude":    "claude_code",
-	".codeium":   "windsurf",
-	".codex":     "codex",
-	".cursor":    "cursor",
-	".hermes":    "hermes",
-	".skillport": "skillport",
-	".windsurf":  "windsurf",
+// skillTrees are directories where a SKILL.md *anywhere* below counts,
+// used as a last resort for markers outside every skillDirs entry — e.g.
+// .hermes/skills/official/apple/notes/SKILL.md, which is nested deeper
+// than the documented <dir>/<name>/SKILL.md layout.
+//
+// These deliberately carry Readers like any other location rather than
+// naming a single owner. A client's directory is not the same thing as a
+// client: ~/.claude/skills is read by four clients (see skillDirs),
+// while a SKILL.md elsewhere under ~/.claude is only meaningful to
+// Claude Code, because the others read that one documented path and not
+// the tree around it. Stating each set here makes that reviewable
+// instead of implied.
+//
+// Matched only at the root of a home, and only after skillDirs.
+var skillTrees = []Location{
+	{".claude", Home, []string{"claude_code"}},
+	{".codeium", Home, []string{"windsurf"}},
+	{".codex", Home, []string{"codex"}},
+	{".cursor", Home, []string{"cursor"}},
+	{".hermes", Home, []string{"hermes"}},
+	{".skillport", Home, []string{"skillport"}},
+	{".windsurf", Home, []string{"windsurf"}},
+}
+
+// readersOfTree returns the clients that read the skill tree rel sits
+// under, if any.
+func readersOfTree(rel string) ([]string, bool) {
+	first, _, _ := strings.Cut(rel, "/")
+	if first == "" {
+		return nil, false
+	}
+	for _, loc := range skillTrees {
+		if loc.Path == first {
+			return loc.Readers, true
+		}
+	}
+	return nil, false
 }
 
 // scanSkills discovers skills under one root: the documented global
@@ -112,13 +139,13 @@ var homeClientTool = map[string]string{
 func scanSkills(s *state, markers []string) []skill {
 	var out []skill
 
-	globalDirs := make([]string, 0, len(skillDirRules))
-	for _, rule := range skillDirRules {
-		if rule.global == nil {
+	homeDirs := make([]string, 0, len(skillDirs))
+	for _, loc := range skillDirs {
+		if !loc.Scope.has(Home) {
 			continue
 		}
-		globalDirs = append(globalDirs, rule.dir)
-		entries, err := fs.ReadDir(s.fsys, rule.dir)
+		homeDirs = append(homeDirs, loc.Path)
+		entries, err := fs.ReadDir(s.fsys, loc.Path)
 		if err != nil {
 			continue
 		}
@@ -126,7 +153,7 @@ func scanSkills(s *state, markers []string) []skill {
 			if !e.IsDir() {
 				continue
 			}
-			if sk, ok := ingestSkill(s, path.Join(rule.dir, e.Name()), rule.global, ""); ok {
+			if sk, ok := ingestSkill(s, path.Join(loc.Path, e.Name()), loc.Readers, ""); ok {
 				out = append(out, sk)
 			}
 		}
@@ -134,7 +161,7 @@ func scanSkills(s *state, markers []string) []skill {
 
 	seen := map[string]bool{}
 	for _, marker := range markers {
-		if underAnyDir(marker, globalDirs) || s.claimedUnder(marker) {
+		if underAnyDir(marker, homeDirs) || s.claimedUnder(marker) {
 			// Already handled above (or by a plugin scan); also
 			// suppresses nested SKILL.md files inside a global skill's
 			// own directory.
@@ -158,33 +185,33 @@ func scanSkills(s *state, markers []string) []skill {
 // nested SKILL.md files (vendored examples, references) don't become
 // phantom skills. Markers outside any documented skills directory fall
 // back to the owning home dot-directory, or to no clients at all.
-func classifySkillMarker(s *state, rel string) (skillDir string, clients []string, projectPath string) {
+func classifySkillMarker(s *state, rel string) (skillDir string, readers []string, projectPath string) {
 	bestStart := -1
-	var bestRule skillDirRule
-	for _, rule := range skillDirRules {
-		if rule.project == nil {
+	var best Location
+	for _, loc := range skillDirs {
+		if !loc.Scope.has(Project) {
 			continue
 		}
-		if i := strings.LastIndex(rel, "/"+rule.dir+"/"); i >= 0 && i+1 > bestStart {
+		if i := strings.LastIndex(rel, "/"+loc.Path+"/"); i >= 0 && i+1 > bestStart {
 			bestStart = i + 1
-			bestRule = rule
+			best = loc
 		}
 	}
-	// A documented project skills dir at the very root of the home
-	// counts too (rule.global == nil there means the docs only describe
-	// the project scope; treat the home itself as the project).
+	// A project skills dir at the very root of the home counts too: a
+	// location documented only for Project scope still applies there,
+	// with the home itself as the project.
 	if bestStart < 0 {
-		for _, rule := range skillDirRules {
-			if rule.project != nil && strings.HasPrefix(rel, rule.dir+"/") {
+		for _, loc := range skillDirs {
+			if loc.Scope.has(Project) && strings.HasPrefix(rel, loc.Path+"/") {
 				bestStart = 0
-				bestRule = rule
+				best = loc
 				break
 			}
 		}
 	}
 
 	if bestStart >= 0 {
-		dirEnd := bestStart + len(bestRule.dir)
+		dirEnd := bestStart + len(best.Path)
 		skillDir = rel[:dirEnd]
 		if child, _, ok := strings.Cut(rel[dirEnd+1:], "/"); ok {
 			skillDir = skillDir + "/" + child
@@ -193,13 +220,12 @@ func classifySkillMarker(s *state, rel string) (skillDir string, clients []strin
 		if bestStart > 0 {
 			projectRel = rel[:bestStart-1]
 		}
-		return skillDir, bestRule.project, s.abs(projectRel)
+		return skillDir, best.Readers, s.abs(projectRel)
 	}
 
 	skillDir = path.Dir(rel)
-	first, _, _ := strings.Cut(rel, "/")
-	if tool, ok := homeClientTool[first]; ok {
-		return skillDir, []string{tool}, ""
+	if readers, ok := readersOfTree(rel); ok {
+		return skillDir, readers, ""
 	}
 	return skillDir, nil, s.abs(skillDir)
 }

@@ -5,11 +5,24 @@
 // server, skill, and plugin observations, and returns a
 // types.DeviceScanManifest suitable for submission to the Obot backend.
 //
-// Each client is integrated as a value type implementing Scanner in its
-// own file (claudecode.go, codex.go, …). The pipeline per root is:
-// per-client home scans → one filesystem walk → project-config dispatch
-// → skill discovery → presence detection. Observations from every root
-// are merged into a single manifest by build.
+// The package is organized around three tables rather than a per-client
+// interface, because the conventions it reads are increasingly
+// client-neutral — ~/.agents/skills is read by four clients and owned by
+// none:
+//
+//   - sources (source.go): places the scan reads, each with the decoder
+//     for its format. One client file per format (claudecode.go,
+//     codex.go, …) holds the decoders and nothing else.
+//   - skillDirs and skillTrees (skills.go): where skills live and which
+//     clients read them.
+//   - clients (client.go): identity plus how to tell a client is on the
+//     device.
+//
+// The pipeline per root is: home sources → one filesystem walk →
+// project-source dispatch → skill discovery → client detection.
+// Observations from every root are merged into a single manifest by
+// build, which attributes each artifact to the readers of the location
+// it came from, intersected with the clients actually found.
 package scan
 
 import (
@@ -95,23 +108,27 @@ func Scan(ctx context.Context, opts Options) (types.DeviceScanManifest, error) {
 //  4. Skill discovery: documented skills directories first, then the
 //     walk markers, attributed to the set of clients that read each
 //     location.
-//  5. Client presence detection (primary root only).
+//  5. Client detection.
 func scanRoot(ctx context.Context, s *state) (observations, error) {
 	var (
 		obs       observations
 		skipPaths = map[string]bool{}
 	)
-	for _, c := range scanners {
+	srcs := allSources(s.platform)
+	for _, src := range srcs {
 		if err := ctx.Err(); err != nil {
 			return obs, err
 		}
-		obs.add(c.ScanHome(s))
-		for _, rel := range c.GlobalConfigs(s.platform) {
-			skipPaths[rel] = true
+		if !src.Scope.has(Home) {
+			continue
 		}
+		obs.add(src.Read(s, src.Path, ""))
+		// A home config can also match its own project-scope suffix
+		// (~/.cursor/mcp.json is both); suppress the redundant walk hit.
+		skipPaths[src.Path] = true
 	}
 
-	hits, skillMarkers := walk(ctx, s, scanners, skipPaths)
+	hits, skillMarkers := walk(ctx, s, srcs, skipPaths)
 	for _, h := range hits {
 		if err := ctx.Err(); err != nil {
 			return obs, err
@@ -119,7 +136,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 		if s.claimedUnder(h.path) {
 			continue
 		}
-		obs.add(h.scanner.ScanProject(s, h.path))
+		obs.add(h.source.Read(s, h.path, h.source.projectOf(s, h.path)))
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -127,9 +144,7 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 	}
 	obs.skills = append(obs.skills, scanSkills(s, skillMarkers)...)
 
-	if s.primary {
-		detectPresence(s)
-	}
+	detectClients(s)
 	return obs, nil
 }
 
@@ -139,10 +154,9 @@ func scanRoot(ctx context.Context, s *state) (observations, error) {
 //
 // Skills carry a set of discovering clients internally, but the wire
 // type can only name one client per row, so each skill is emitted once
-// per client (rows share the same File). Skills no client discovers are
-// emitted once as MultiClient. A clients[] row is synthesized for any
-// real client name referenced by an observation without a
-// presence-detected row; MultiClient never gets one.
+// per client (rows share the same File). A skill is attributed only to
+// clients reported() finds on the device; one no reported client
+// discovers is emitted once as MultiClient, so nothing is dropped.
 func build(files map[string]types.DeviceScanFile, clients map[string]types.DeviceScanClient, obs observations) types.DeviceScanManifest {
 	out := types.DeviceScanManifest{
 		Files:      make([]types.DeviceScanFile, 0, len(files)),
@@ -158,17 +172,21 @@ func build(files map[string]types.DeviceScanFile, clients map[string]types.Devic
 		out.Plugins = []types.DeviceScanPlugin{}
 	}
 
+	report := reported(clients, obs)
 	for _, sk := range obs.skills {
-		if len(sk.clients) == 0 {
-			row := sk.DeviceScanSkill
-			row.Client = MultiClient
-			out.Skills = append(out.Skills, row)
-			continue
+		entry := sk.DeviceScanSkill
+		var attributed bool
+		for _, name := range sk.clients {
+			if !report[name] {
+				continue
+			}
+			entry.Client = name
+			out.Skills = append(out.Skills, entry)
+			attributed = true
 		}
-		for _, c := range sk.clients {
-			row := sk.DeviceScanSkill
-			row.Client = c
-			out.Skills = append(out.Skills, row)
+		if !attributed {
+			entry.Client = MultiClient
+			out.Skills = append(out.Skills, entry)
 		}
 	}
 
@@ -190,18 +208,16 @@ func build(files map[string]types.DeviceScanFile, clients map[string]types.Devic
 	for _, p := range out.Plugins {
 		hasPlugin[p.Client] = true
 	}
-	for _, set := range []map[string]bool{hasMCP, hasSkill, hasPlugin} {
-		for name := range set {
-			if name == "" || name == MultiClient {
-				continue
-			}
-			if _, ok := clients[name]; !ok {
-				clients[name] = types.DeviceScanClient{Name: name}
-			}
+	for name := range report {
+		if _, ok := clients[name]; !ok {
+			clients[name] = types.DeviceScanClient{Name: name}
 		}
 	}
 
 	for _, name := range sortedKeys(clients) {
+		if !report[name] {
+			continue
+		}
 		c := clients[name]
 		c.HasMCPServers = hasMCP[name]
 		c.HasSkills = hasSkill[name]
@@ -209,6 +225,32 @@ func build(files map[string]types.DeviceScanFile, clients map[string]types.Devic
 		out.Clients = append(out.Clients, c)
 	}
 	return out
+}
+
+// reported returns the client names that earn a clients[] row: those
+// detection found on the device, and those that own configured
+// artifacts — an MCP server or a plugin parsed out of the client's own
+// config tree.
+//
+// Skills deliberately don't count. A SKILL.md is a file a user can drop
+// anywhere, and the shared discovery conventions (~/.claude/skills,
+// ~/.agents/skills) mean one file is readable by several clients, so
+// attributing a row to each of them reports clients that were never
+// installed.
+func reported(clients map[string]types.DeviceScanClient, obs observations) map[string]bool {
+	report := make(map[string]bool, len(clients))
+	for name := range clients {
+		report[name] = true
+	}
+	for _, m := range obs.servers {
+		report[m.Client] = true
+	}
+	for _, p := range obs.plugins {
+		report[p.Client] = true
+	}
+	delete(report, "")
+	delete(report, MultiClient)
+	return report
 }
 
 // sortedKeys returns m's keys in order. Always non-nil so wire slices

@@ -562,80 +562,97 @@ func TestClaudeDesktopRpmPlugin(t *testing.T) {
 	}
 }
 
-// runPresence exercises detectPresence against a real home directory
-// and returns the detected client rows.
-func runPresence(t *testing.T, home string) map[string]types.DeviceScanClient {
+// runDetect exercises detectClients against a real home directory and
+// returns the detected client rows.
+func runDetect(t *testing.T, home string) map[string]types.DeviceScanClient {
 	t.Helper()
 	clients := map[string]types.DeviceScanClient{}
 	s := newState(
 		Root{FS: os.DirFS(home), Path: home, Platform: runtime.GOOS, Primary: true},
 		DefaultMaxDepth, map[string]types.DeviceScanFile{}, clients,
 	)
-	detectPresence(s)
+	detectClients(s)
 	return clients
 }
 
-func TestPresence_NotInstalled(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_PROFILE", "")
-	appBundleDirs = []string{t.TempDir()}
-	t.Cleanup(func() { appBundleDirs = nil })
+// mkdirs creates every directory, relative to home.
+func mkdirs(t *testing.T, home string, rels ...string) {
+	t.Helper()
+	for _, rel := range rels {
+		if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(rel)), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+	}
+}
 
-	if clients := runPresence(t, t.TempDir()); len(clients) != 0 {
+func TestDetect_NothingInstalled(t *testing.T) {
+	isolateHost(t)
+	if clients := runDetect(t, t.TempDir()); len(clients) != 0 {
 		t.Fatalf("expected no clients, got %+v", clients)
 	}
 }
 
-func TestPresence_BinaryOnPath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix-style stub binary")
+// TestDetect_ConfigDirIsNotEvidence is the regression for obot#7288: a
+// client's config directory can be created by a user, read by another
+// client, or — for ~/.claude — written by our own hook install, so it
+// must not by itself make the client installed.
+func TestDetect_ConfigDirIsNotEvidence(t *testing.T) {
+	isolateHost(t)
+	home := t.TempDir()
+	mkdirs(t, home, ".claude", ".codex", ".cursor", ".config/opencode")
+	// What hook-install writes, and a skill a user dropped in.
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
 	}
-	pathDir := t.TempDir()
-	stub := filepath.Join(pathDir, "openclaw")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write stub: %v", err)
-	}
-	t.Setenv("PATH", pathDir)
-	t.Setenv("OPENCLAW_PROFILE", "")
-	appBundleDirs = []string{t.TempDir()}
-	t.Cleanup(func() { appBundleDirs = nil })
+	mkdirs(t, home, ".claude/skills/pdf")
 
-	clients := runPresence(t, t.TempDir())
-	c, ok := clients["openclaw"]
-	if !ok {
-		t.Fatalf("openclaw not detected: %+v", clients)
-	}
-	if c.BinaryPath != stub {
-		t.Errorf("BinaryPath = %q, want %q", c.BinaryPath, stub)
-	}
-	if c.InstallPath != "" || c.ConfigPath != "" {
-		t.Errorf("expected only BinaryPath set, got %+v", c)
+	if clients := runDetect(t, home); len(clients) != 0 {
+		t.Fatalf("config dirs alone must not report clients, got %+v", clients)
 	}
 }
 
-func TestPresence_ConfigDirWithProfile(t *testing.T) {
+// TestDetect_RuntimeState covers the signal that replaced the $PATH
+// lookup: state a client only writes by running.
+func TestDetect_RuntimeState(t *testing.T) {
+	isolateHost(t)
 	home := t.TempDir()
-	t.Setenv("PATH", t.TempDir())
+	mkdirs(t, home, ".claude", ".local/share/opencode")
+	for _, rel := range []string{".claude/history.jsonl", ".local/share/opencode/opencode.db"} {
+		if err := os.WriteFile(filepath.Join(home, filepath.FromSlash(rel)), nil, 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	clients := runDetect(t, home)
+	for _, name := range []string{"claude_code", "opencode"} {
+		c, ok := clients[name]
+		if !ok {
+			t.Fatalf("%s not detected: %+v", name, clients)
+		}
+		if c.InstallPath == "" {
+			t.Errorf("%s: no evidence path recorded: %+v", name, c)
+		}
+	}
+	if c := clients["claude_code"]; c.ConfigPath != filepath.Join(home, ".claude") {
+		t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, filepath.Join(home, ".claude"))
+	}
+}
+
+// TestDetect_ProfileDir: OPENCLAW_PROFILE suffixes the directory name,
+// and the unsuffixed directory must not match when a profile is set.
+func TestDetect_ProfileDir(t *testing.T) {
+	isolateHost(t)
 	t.Setenv("OPENCLAW_PROFILE", "dev")
-	appBundleDirs = []string{t.TempDir()}
-	t.Cleanup(func() { appBundleDirs = nil })
+	home := t.TempDir()
+	mkdirs(t, home, ".openclaw-dev/logs", ".openclaw/logs")
 
-	profileDir := filepath.Join(home, ".openclaw-dev")
-	if err := os.Mkdir(profileDir, 0o755); err != nil {
-		t.Fatalf("mkdir profile: %v", err)
-	}
-	// Distractor: unsuffixed dir must NOT match when profile is set.
-	if err := os.Mkdir(filepath.Join(home, ".openclaw"), 0o755); err != nil {
-		t.Fatalf("mkdir distractor: %v", err)
-	}
-
-	clients := runPresence(t, home)
+	clients := runDetect(t, home)
 	c, ok := clients["openclaw"]
 	if !ok {
 		t.Fatalf("openclaw not detected: %+v", clients)
 	}
-	if c.ConfigPath != profileDir {
-		t.Errorf("ConfigPath = %q, want %q", c.ConfigPath, profileDir)
+	if want := filepath.Join(home, ".openclaw-dev", "logs"); c.InstallPath != want {
+		t.Errorf("InstallPath = %q, want %q", c.InstallPath, want)
 	}
 }
 

@@ -38,35 +38,12 @@ type claudePluginsRegistry struct {
 	} `json:"plugins"`
 }
 
-type claudeCodeScanner struct{}
-
-func (claudeCodeScanner) Name() string { return "claude_code" }
-
-func (claudeCodeScanner) Presence(string) presenceDef {
-	return presenceDef{binaries: []string{"claude"}, configPaths: []string{".claude"}}
-}
-
-func (claudeCodeScanner) GlobalConfigs(string) []string { return []string{claudeGlobalConfigRel} }
-
-func (claudeCodeScanner) ProjectConfigs() []string { return []string{".mcp.json"} }
-
-func (c claudeCodeScanner) ScanHome(s *state) observations {
-	// The plugins tree also holds marketplace clones and stale version
-	// caches; the plugin scan below inventories what's actually
-	// installed, so nothing under it may leak through the walk.
-	s.claim(claudePluginsRel)
-
-	obs := c.scanGlobalConfig(s)
-	obs.add(c.scanPlugins(s))
-	return obs
-}
-
-func (claudeCodeScanner) scanGlobalConfig(s *state) observations {
-	cfg, ok := readJSON[claudeCodeConfig](s.fsys, claudeGlobalConfigRel)
+func claudeCodeGlobalConfig(s *state, configRel string) observations {
+	cfg, ok := readJSON[claudeCodeConfig](s.fsys, configRel)
 	if !ok {
 		return observations{}
 	}
-	configPath := s.addFileOrAbs(claudeGlobalConfigRel)
+	configPath := s.addFileOrAbs(configRel)
 
 	servers := make([]types.DeviceScanMCPServer, 0, len(cfg.MCPServers))
 	for _, name := range sortedKeys(cfg.MCPServers) {
@@ -92,15 +69,10 @@ func (claudeCodeScanner) scanGlobalConfig(s *state) observations {
 	return observations{servers: servers}
 }
 
-func (claudeCodeScanner) ScanProject(s *state, configRel string) observations {
-	projectPath := s.abs(path.Dir(configRel))
-	return observations{servers: emitJSONServers(s, configRel, "mcpServers", "claude_code", projectPath)}
-}
-
 // scanPlugins reads installed_plugins.json and emits a plugin
 // observation (plus nested MCP server / skill observations) for each
 // installation that resolves to a directory under the home.
-func (claudeCodeScanner) scanPlugins(s *state) observations {
+func scanClaudeCodePlugins(s *state) observations {
 	registry, ok := readJSON[claudePluginsRegistry](s.fsys, claudeInstalledPluginsRel)
 	if !ok || len(registry.Plugins) == 0 {
 		return observations{}
@@ -179,4 +151,23 @@ func readEnabledPluginsMap(fsys fs.FS, rel string) map[string]bool {
 func splitPluginKey(key string) (name, marketplace string) {
 	name, marketplace, _ = strings.Cut(key, "@")
 	return name, marketplace
+}
+
+// claudeCodeHomeServers reads ~/.claude.json, which carries both Claude
+// Code's own servers and a projects map of per-project ones.
+func claudeCodeHomeServers(s *state, rel, _ string) observations {
+	return claudeCodeGlobalConfig(s, rel)
+}
+
+// claudeCodeProjectServers reads a project-scope .mcp.json.
+func claudeCodeProjectServers(s *state, rel, projectPath string) observations {
+	return observations{servers: emitJSONServers(s, rel, "mcpServers", "claude_code", projectPath)}
+}
+
+// claudeCodePlugins inventories the installed plugin tree. The tree also
+// holds marketplace clones and stale version caches, so it is claimed
+// whole: nothing under it may leak back through the walk.
+func claudeCodePlugins(s *state, rel, _ string) observations {
+	s.claim(rel)
+	return scanClaudeCodePlugins(s)
 }

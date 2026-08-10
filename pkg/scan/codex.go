@@ -41,38 +41,6 @@ type codexEntry struct {
 	Enabled           *bool          `toml:"enabled"`
 }
 
-type codexScanner struct{}
-
-func (codexScanner) Name() string { return "codex" }
-
-func (codexScanner) Presence(string) presenceDef {
-	return presenceDef{binaries: []string{"codex"}, configPaths: []string{".codex"}}
-}
-
-func (codexScanner) GlobalConfigs(string) []string { return []string{codexGlobalConfigRel} }
-
-func (codexScanner) ProjectConfigs() []string { return []string{".codex/config.toml"} }
-
-func (c codexScanner) ScanHome(s *state) observations {
-	var obs observations
-	if cfg, ok := readTOML[codexConfig](s.fsys, codexGlobalConfigRel); ok {
-		configPath := s.addFileOrAbs(codexGlobalConfigRel)
-		obs.servers = codexEmit(cfg.MCPServers, configPath, "")
-	}
-	obs.add(c.scanPlugins(s))
-	return obs
-}
-
-func (codexScanner) ScanProject(s *state, configRel string) observations {
-	cfg, ok := readTOML[codexConfig](s.fsys, configRel)
-	if !ok {
-		return observations{}
-	}
-	configPath := s.addFileOrAbs(configRel)
-	projectPath := s.abs(path.Dir(path.Dir(configRel)))
-	return observations{servers: codexEmit(cfg.MCPServers, configPath, projectPath)}
-}
-
 func codexEmit(servers map[string]codexEntry, configPath, projectPath string) []types.DeviceScanMCPServer {
 	out := make([]types.DeviceScanMCPServer, 0, len(servers))
 	for _, name := range sortedKeys(servers) {
@@ -133,7 +101,7 @@ func codexTransport(typeField, transportField, urlField string) string {
 // scanPlugins walks .codex/plugins/cache/<marketplace>/<plugin>/<ver>/
 // and emits a plugin observation for the highest version of each plugin
 // that has a manifest at .codex-plugin/plugin.json.
-func (codexScanner) scanPlugins(s *state) observations {
+func codexPlugins(s *state, _, _ string) observations {
 	mkts, err := fs.ReadDir(s.fsys, codexPluginCacheRel)
 	if err != nil {
 		return observations{}
@@ -263,4 +231,14 @@ func compareVersionSegment(a, b string) int {
 	default:
 		return strings.Compare(a, b)
 	}
+}
+
+// codexServers reads a Codex config.toml. Home and project scope share
+// one shape, so one decoder covers both.
+func codexServers(s *state, rel, projectPath string) observations {
+	cfg, ok := readTOML[codexConfig](s.fsys, rel)
+	if !ok {
+		return observations{}
+	}
+	return observations{servers: codexEmit(cfg.MCPServers, s.addFileOrAbs(rel), projectPath)}
 }
