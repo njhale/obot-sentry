@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Remove Obot Sentry from this Mac: both launchd jobs, the binary, the pkg
+# Remove Obot Sentry from this device: both launchd jobs, the binary, the pkg
 # receipt, any local configuration, and the device identity plus every
-# user's scan state. Idempotent, and harmless on a Mac where Obot Sentry
+# user's scan state. Idempotent, and harmless on a device where Obot Sentry
 # was never installed.
-#
-# Hooks go first, while the binary that removes them still exists.
 #
 # Usage: sudo bash uninstall.sh
 set -euo pipefail
@@ -14,12 +12,12 @@ if [[ "$(id -u)" != 0 ]]; then
 	exit 1
 fi
 
-# Hooks first, before the binary that removes them goes.
+# Stop convergence first, so the daemon cannot re-add the hooks removed below.
+launchctl bootout system/ai.obot.obot-sentry.hook-install 2>/dev/null || true
+
 if [[ -x /usr/local/bin/obot-sentry ]]; then
 	/usr/local/bin/obot-sentry hook-uninstall || true
 fi
-
-launchctl bootout system/ai.obot.obot-sentry.hook-install 2>/dev/null || true
 
 # The scan agent runs in each signed-in user's GUI domain, so unload it per
 # session. One loginwindow process per session gives the uids to visit.
