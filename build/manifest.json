@@ -33,6 +33,10 @@
     {
       "id": "intune",
       "label": "Microsoft Intune"
+    },
+    {
+      "id": "jamf",
+      "label": "Jamf Pro"
     }
   ],
   "configurations": [
@@ -61,6 +65,21 @@
         "macos/ai.obot.obot-sentry.pppc.mobileconfig",
         "macos/uninstall.sh",
         "macos/intune/INSTRUCTIONS.md.tmpl"
+      ]
+    },
+    {
+      "platform": "jamf",
+      "os": "macos",
+      "osLabel": "macOS",
+      "description": "Deploy Obot Sentry to macOS devices with Jamf Pro",
+      "suggestedName": "macOS Devices",
+      "instructions": "macos/jamf/INSTRUCTIONS.md.tmpl",
+      "assets": [
+        "macos/obot-sentry.pkg",
+        "macos/ai.obot.obot-sentry.mobileconfig.tmpl",
+        "macos/ai.obot.obot-sentry.pppc.mobileconfig",
+        "macos/uninstall.sh",
+        "macos/jamf/INSTRUCTIONS.md.tmpl"
       ]
     },
     {

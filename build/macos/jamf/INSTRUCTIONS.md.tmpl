@@ -1,0 +1,183 @@
+# Deploy Obot Sentry to macOS with Jamf Pro
+
+This install package contains:
+
+- `obot-sentry.pkg` — the obot-sentry device agent (version
+  {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
+  two launchd jobs.
+- `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The server
+  URL and scan interval are already filled in; you supply the enrollment key.
+- `ai.obot.obot-sentry.pppc.mobileconfig` — the file access the agent's
+  background scans need. Upload as-is.
+- `uninstall.sh` — removes the agent and its hooks. See **Uninstall**.
+
+## 1. Install the agent
+
+1. Upload `obot-sentry.pkg` under *Settings > Computer Management > Packages*.
+
+2. Create a policy under *Computers > Policies* with a **Packages** payload that
+   installs it. Set the trigger to **Recurring Check-in** and the execution
+   frequency to **Once per computer**.
+
+3. In the **Scope** tab, target the users, groups, or computers you'd like
+   to install Obot Sentry to.
+
+## 2. Push the configuration
+
+1. Open `ai.obot.obot-sentry.mobileconfig` in a text editor and replace
+   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key.
+
+2. Go to *Computers > Configuration Profiles*, click **Upload**, and select the
+   edited file. Leave **Level** set to **Computer Level**.
+
+3. Set the **Scope** to the same targets selected by the package policy.
+
+To rotate the key or change the settings, edit the file and re-upload
+it to the same profile. Computers pick the change up on their next profile
+sync.
+
+## 3. Grant file access
+
+Upload `ai.obot.obot-sentry.pppc.mobileconfig` the same way, at **Computer
+Level**, scoped to the same targets.
+
+## 4. Report the installed version
+
+Give Jamf the version from the package by creating an extension attribute under
+*Settings > Computer Management > Extension Attributes*, with input type **Script**:
+
+```sh
+#!/bin/sh
+version=$(/usr/sbin/pkgutil --pkg-info ai.obot.obot-sentry 2>/dev/null | awk '/^version:/ { print $2 }')
+echo "<result>${version}</result>"
+```
+
+## What the installer does
+
+- Installs `obot-sentry` to `/usr/local/bin`.
+- Installs a LaunchAgent (`ai.obot.obot-sentry.scan`) that macOS runs in each
+  signed-in user's session, as that user, at login and every 15 minutes. Each
+  run submits a scan at most every {{.scanIntervalMinutes}} minutes
+  (`ScanIntervalMinutes` in the configuration profile — change it there
+  without reinstalling).
+- Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as
+  root at load and hourly. It converges the managed local-agent audit hooks for
+  the signed-in user, so hooks are re-checked for drift every hour.
+- Prepares `/Library/Application Support/obot/obot-sentry`, where the device
+  identity shared by every user on the device is stored.
+
+## Verify the install
+
+1. Ensure the package was installed:
+
+   ```sh
+   pkgutil --pkg-info ai.obot.obot-sentry
+   ```
+
+   This prints the identifier, version, and install time from the receipt — the
+   same receipt the extension attribute above reports. No receipt at all means the
+   policy never installed it.
+
+   If there is no package receipt, check `/var/log/jamf.log` for the policy run,
+   then trigger a check-in with:
+
+   ```sh
+   sudo jamf policy -verbose
+   ```
+
+   If the log shows the policy installing the package but the receipt is missing,
+   check the contents of `/var/log/install.log` to debug further.
+
+2. Ensure the settings arrived:
+
+   ```sh
+   sudo defaults read /Library/Managed\ Preferences/ai.obot.obot-sentry
+   ```
+
+   If delivered correctly, this should display the latest settings.
+
+3. Ensure both launchd jobs are loaded:
+
+   ```sh
+   launchctl print "gui/$(stat -f %u /dev/console)/ai.obot.obot-sentry.scan" | grep -E 'state|program|runs|last exit code'
+   sudo launchctl print system/ai.obot.obot-sentry.hook-install | grep -E 'state|program|runs|last exit code'
+   ```
+
+   This will produce the following output:
+
+   - `state = not running` is the healthy idle state. Both jobs run on a schedule
+     and exit rather than staying resident, so `running` is only what you catch
+     mid-run.
+   - `program = /usr/local/bin/obot-sentry` confirms the job points at the
+     installed binary.
+   - `runs` counts completed launches.
+   - `last exit code = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the values in the profile from step 2.
+
+4. Ensure scans are landing:
+
+   To get the results of the latest scan attempt, run the following command:
+
+   ```sh
+   sudo cat "/Users/$(stat -f %Su /dev/console)/Library/Caches/obot/obot-sentry/scan.json"
+   ```
+
+   `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
+   `error` with `lastError` carrying the reason.
+
+   The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+
+   To view the last attempt, run:
+
+   ```sh
+   logs="/Users/$(stat -f %Su /dev/console)/Library/Caches/obot/obot-sentry/scan-logs"; sudo cat "$logs/$(sudo ls "$logs" | tail -1)"
+   ```
+
+   The hook-install daemon keeps no state file. It prints its convergence table to
+   the unified log on every hourly run:
+
+   ```sh
+   log show --last 2h --predicate 'process == "obot-sentry"'
+   ```
+{{if .enforcementEnabled}}
+## Tool-call enforcement
+
+Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
+allowlist before it runs. The check is a single request to Obot, and it is
+**fail-closed**: if Obot cannot be reached, the computer is not enrolled, or the
+hook cannot tell which MCP server a call targets, the call is blocked.
+
+- Blocking a call never *approves* one. Your users' agent approval prompts still
+  apply to everything that is allowed.
+- Visual Studio Code is not supported for enforcement. Its audit hook is unaffected.
+- An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
+  claude.ai connector — by display name. A stdio server started from a local
+  executable path presents none of those, so it cannot be allowlisted and is
+  blocked by design.
+- Turning enforcement off in Obot stops the blocking immediately, for all computers,
+  even before the hooks are removed from any computer.
+{{end}}
+## Upgrades
+
+Upload the new `obot-sentry.pkg` and replace the package in the policy's
+**Packages** payload. A policy set to **Once per computer** has already run
+everywhere, so it will not reinstall on its own — either flush its logs
+(*Computers > Policies > the policy > Logs > Flush All*), or scope it to a smart
+group built on the extension attribute from step 4, which re-includes each
+computer as soon as its reported version falls behind.
+
+The profiles are separate. If the new download contains changed `.mobileconfig`
+files, re-upload them to the same profiles.
+
+## Uninstall
+
+1. Add `uninstall.sh` under *Settings > Computer Management > Scripts*.
+
+2. Create a policy under *Computers > Policies* with a **Scripts** payload that
+   runs it, scoped to the computers, users, or groups you are removing it from.
+   Leave the priority at **After**.
+
+3. Once the policy has run everywhere, remove the targets from the scope of
+   both configuration profiles and of the install policy.
+
+Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
