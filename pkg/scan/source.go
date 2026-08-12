@@ -48,6 +48,9 @@ func (src Source) projectOf(s *state, rel string) string {
 // is by client name so emit order is deterministic.
 func sources(platform string) []Source {
 	return []Source{
+		{antigravityMCPConfigRel, Home, antigravityServers},
+		{antigravityPluginsRel, Home, antigravityPlugins},
+
 		// Claude Code's global config carries both its own servers and a
 		// projects map; project-scope .mcp.json is the standard shape.
 		{claudeGlobalConfigRel, Home, claudeCodeHomeServers},

@@ -59,13 +59,12 @@ func clients(platform string) []Client {
 		{
 			// Antigravity 2.0 renamed the app bundle, the Windows install
 			// directory and the dot-directory from "Antigravity" to
-			// "Antigravity IDE"; both generations are checked.
-			//
-			// ~/.gemini is deliberately not listed: Antigravity reads
-			// ~/.gemini/config/skills (see skillDirs) but the directory
-			// belongs to Gemini's tooling, not to this client.
+			// "Antigravity IDE"; both generations are checked. Despite
+			// the name, ~/.gemini/antigravity is Antigravity's own state.
 			Name: "antigravity",
 			Installed: []string{
+				".gemini/antigravity/installation_id",
+				".gemini/antigravity/brain",
 				"/Applications/Antigravity IDE.app",
 				"/Applications/Antigravity.app",
 				"Applications/Antigravity IDE.app",

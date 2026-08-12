@@ -89,6 +89,9 @@ var skillDirs = []Location{
 	{".copilot/skills", Home, []string{"vscode"}},
 	{".cursor/skills", Home | Project, []string{"cursor"}},
 	{".gemini/config/skills", Home, []string{"antigravity"}},
+	// Skills Antigravity ships with itself; its plugin skills come out
+	// with the plugin that owns them.
+	{antigravityBuiltinSkills, Home, []string{"antigravity"}},
 	{".github/skills", Project, []string{"vscode"}},
 	{".opencode/skills", Project, []string{"opencode"}},
 }
