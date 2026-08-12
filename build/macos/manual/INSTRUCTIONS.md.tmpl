@@ -1,6 +1,6 @@
 # Install Obot Sentry on macOS
 
-Install Obot Sentry on a Mac without an MDM. This download contains:
+Install Obot Sentry on a Mac without an MDM. This install package contains:
 
 - `obot-sentry.pkg` — the installer (version {{.obotSentryVersion}}). Installs
   the agent and schedules scans and hook convergence, exactly as the MDM
@@ -12,8 +12,7 @@ Everything below needs an administrator account.
 ## Installer (pkg)
 
 1. Write the deployment configuration, replacing `REPLACE_WITH_ENROLLMENT_KEY`
-   with your enrollment key. This is the same preferences domain an MDM profile
-   delivers, in the location macOS reserves for local administrators:
+   with your enrollment key:
 
    ```sh
    sudo defaults write /Library/Preferences/ai.obot.obot-sentry ServerURL -string "{{.serverURL}}"
@@ -28,58 +27,19 @@ Everything below needs an administrator account.
    sudo installer -pkg obot-sentry.pkg -target /
    ```
 
-   Configuring first means the first scan and hook convergence run immediately,
-   because the installer starts both launchd jobs. The reverse order works too —
-   the jobs pick the configuration up on their next run.
-
 3. Enroll the device:
 
    ```sh
    sudo obot-sentry enroll
    ```
 
-   Enroll verifies the configuration and prints the device ID this Mac reports
-   as. Scans enroll on their own, so this is a check rather than a
-   prerequisite — and it is idempotent, so running it again is harmless.
+   Enroll verifies the configuration and prints the enrolled device ID. It is
+   idempotent, so running it again is harmless.
 
 4. Grant Obot Sentry Full Disk Access in *System Settings > Privacy & Security >
-   Full Disk Access*, adding `/usr/local/bin/obot-sentry`. Scans run in the
-   background, where macOS cannot prompt for consent, so without this they
-   silently skip protected locations such as `~/Desktop`, `~/Documents`, and
-   `~/Downloads`.
-
-   The MDM channels push this grant as a profile instead. macOS only honors
-   Full Disk Access profiles that arrive from a user-approved MDM, so there is
-   no profile you can install by hand to skip this step.
-
-5. Confirm both jobs are loaded:
-
-   ```sh
-   launchctl print "gui/$(id -u)/ai.obot.obot-sentry.scan" | grep -E 'state|program|runs|last exit code'
-   sudo launchctl print system/ai.obot.obot-sentry.hook-install | grep -E 'state|program|runs|last exit code'
-   ```
-
-   Four lines worth reading in each:
-
-   - `state = not running` is the healthy idle state. Both jobs run on a
-     schedule and exit rather than staying resident, so `running` is only what
-     you catch mid-run.
-   - `program = /usr/local/bin/obot-sentry` confirms the job points at the
-     installed binary.
-   - `runs` counts completed launches. It climbs on schedule; stuck at 0 means
-     the job is loaded but has never fired.
-   - `last exit code = 0` means the last run succeeded. Non-zero is usually a
-     configuration problem — recheck the values from step 1.
-
-   `Could not find service` instead means that job never loaded; reinstall the
-   pkg.
-
-   The device appears in Obot as its first scan arrives. To watch the agent
-   work:
-
-   ```sh
-   log stream --predicate 'process == "obot-sentry"'
-   ```
+   Full Disk Access*, adding `/usr/local/bin/obot-sentry`. Without it, background
+   scans silently skip protected locations such as `~/Desktop`, `~/Documents`,
+   and `~/Downloads`.
 
 ## What the installer does
 
@@ -87,22 +47,76 @@ Everything below needs an administrator account.
 - Installs a LaunchAgent (`ai.obot.obot-sentry.scan`) that macOS runs in each
   signed-in user's session, as that user, at login and every 15 minutes. Each
   run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
-  `ScanIntervalMinutes` in step 1 to retune it without reinstalling.
+  `ScanIntervalMinutes` in step 1 without reinstalling.
 - Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as root
   at load and hourly, converging the managed local-agent audit hooks for the
   signed-in user. It reads `EnforcementEnabled` from step 1 on every run, so
   turning enforcement on or off there takes effect without reinstalling.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
-  identity shared by every user on the Mac is stored.
+  identity shared by every user on the device is stored.
+
+## Verify the install
+
+1. Ensure the package was installed:
+
+   ```sh
+   pkgutil --pkg-info ai.obot.obot-sentry
+   ```
+
+   This prints the identifier, version, and install time from the receipt.
+
+2. Ensure the settings are readable:
+
+   ```sh
+   sudo defaults read /Library/Preferences/ai.obot.obot-sentry
+   ```
+
+   If configured correctly, this should display the values from step 1.
+
+3. Ensure both launchd jobs are loaded:
+
+   ```sh
+   launchctl print "gui/$(id -u)/ai.obot.obot-sentry.scan" | grep -E 'state|program|runs|last exit code'
+   sudo launchctl print system/ai.obot.obot-sentry.hook-install | grep -E 'state|program|runs|last exit code'
+   ```
+
+   This will produce the following output:
+
+   - `state = not running` is the healthy idle state. Both jobs run on a
+     schedule and exit rather than staying resident, so `running` is only what
+     you catch mid-run.
+   - `program = /usr/local/bin/obot-sentry` confirms the job points at the
+     installed binary.
+   - `runs` counts completed launches.
+   - `last exit code = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the values from step 1.
+
+4. Ensure scans are landing:
+
+   To get the results of the latest scan attempt, run the following command:
+
+   ```sh
+   cat ~/Library/Caches/obot/obot-sentry/scan.json
+   ```
+
+   `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
+   `error` with `lastError` carrying the reason.
+
+   The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+
+   The hook-install daemon keeps no state file. It prints its convergence table
+   to the unified log on every hourly run:
+
+   ```sh
+   log show --last 2h --predicate 'process == "obot-sentry"'
+   ```
 
 ## Standalone binary (Alternate)
 
 Install `obot-sentry` by hand to run one-off scans or install hooks yourself.
-Use this to try Obot Sentry without the automated scanning and hook maintenance
-the pkg sets up — nothing is scheduled, so every scan is one you run.
 
-1. Install the binary. `hook-install` writes this exact path into every hook and
-   refuses to run if nothing is there, so the location is not optional:
+1. Install the binary. The location is not optional — `hook-install` writes this
+   exact path into every hook and refuses to run if nothing is there:
 
    ```sh
    sudo install -m 755 obot-sentry /usr/local/bin/obot-sentry
@@ -124,26 +138,22 @@ the pkg sets up — nothing is scheduled, so every scan is one you run.
    sudo obot-sentry enroll
    ```
 
-   Enroll verifies the configuration and prints the device ID this Mac reports
-   as.
-
 ### Run a scan
 
 ```sh
 obot-sentry scan --submit --force
 ```
 
-Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits. The same command works after a pkg install, where the launchd jobs also run it on their own.
+Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a
+run within that window skips submission. `--force` bypasses the interval,
+causing the scan to be submitted immediately. The same command works after a pkg
+install.
 
 ### Install hooks
 
 ```sh
 sudo obot-sentry hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
-
-Hooks are installed once and stay as written. Without the pkg's LaunchDaemon
-nothing re-checks them, so rerun this after a change to bring them back.
-
 {{if .enforcementEnabled}}
 ## Tool-call enforcement
 
@@ -166,10 +176,9 @@ themselves are removed.
 {{end}}
 ## Uninstall
 
-`uninstall.sh` removes every Obot Sentry-managed hook, then unloads both launchd
-jobs and removes the binary, the plists, the package receipt, the configuration,
-the shared device identity, and every user's scan state. It covers either
-install path — the parts a standalone install never created are skipped:
+Run `uninstall.sh` to remove every Obot Sentry managed hook, unload both launchd
+jobs, remove the binary, plists, package receipt, configuration,
+shared device identity, and every user's scan state.
 
 ```sh
 sudo bash uninstall.sh

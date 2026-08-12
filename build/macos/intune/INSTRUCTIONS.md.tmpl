@@ -1,6 +1,6 @@
 # Deploy Obot Sentry to macOS with Microsoft Intune
 
-This download contains three files, all deployed to the same device group:
+This install package contains:
 
 - `obot-sentry.pkg` — the obot-sentry device agent (version
   {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
@@ -11,31 +11,15 @@ This download contains three files, all deployed to the same device group:
 - `ai.obot.obot-sentry.pppc.mobileconfig` — the file access the agent's
   background scans need. Upload as-is.
 
-The file names are stable across versions, so upgrades never require editing
-anything.
-
 ## 1. Add the installer
-
-Obot Sentry installs a command-line tool rather than an `.app` bundle, and its
-installer runs a script — packages that install outside `/Applications` and
-carry scripts are exactly what Microsoft documents the **macOS app (PKG)** type
-for. It requires the Intune management agent for macOS (version 2308.006 or
-later), which Intune installs on the device the first time you assign a PKG app
-or shell script to it.
 
 1. In the Intune admin center, go to *Apps > macOS > Add*, select **macOS app
    (PKG)**, and upload `obot-sentry.pkg`.
 
-2. **Detection rules:** set **Ignore app version** to **Yes**, then remove every
-   entry from **Included apps**. That list is only for `.app` bundles the
-   package installs, and Obot Sentry installs none — Microsoft documents that
-   non-application entries left in it stop the app from ever reporting a
-   successful install.
+2. In the **Detection rules** tab, set **Ignore app version** to **Yes**.
 
-3. **Assign** the app as **Required** to the device groups that should report to
-   this configuration.
-
-To confirm an install on a device directly: `pkgutil --pkg-info ai.obot.obot-sentry`.
+3. In the **Assignments** tab, add the users, groups, or devices you'd like to
+   install Obot Sentry to as **Required**.
 
 ## 2. Push the configuration
 
@@ -46,23 +30,16 @@ To confirm an install on a device directly: `pkgutil --pkg-info ai.obot.obot-sen
    **macOS** and profile type **Templates > Custom**, then upload the edited
    file.
 
-3. Assign it to the same device group.
+3. Set the **Assignments** to the same targets selected by the app.
 
-To rotate the key or retune the scan interval later, edit the file, bump
-`PayloadVersion` on both the inner and outer payload, and re-upload. Devices
-pick the change up on their next profile sync — no reinstall.
+To rotate the key or change the settings, edit the file and re-upload
+it to the same profile. Devices pick the change up on their next profile
+sync.
 
 ## 3. Grant file access
 
 Create a second **Templates > Custom** profile, upload
-`ai.obot.obot-sentry.pppc.mobileconfig` as-is, and assign it to the same group.
-
-Scans run in the background, where macOS cannot prompt for consent, so without
-this profile the agent silently skips protected locations such as `~/Desktop`,
-`~/Documents`, and `~/Downloads`. The profile pins Obot's Developer ID
-signature, so it grants access to nothing else. macOS only honors these grants
-on devices enrolled through Automated Device Enrollment or a user-approved
-enrollment.
+`ai.obot.obot-sentry.pppc.mobileconfig` as-is, and assign it to the same targets.
 
 ## What the installer does
 
@@ -70,56 +47,125 @@ enrollment.
 - Installs a LaunchAgent (`ai.obot.obot-sentry.scan`) that macOS runs in each
   signed-in user's session, as that user, at login and every 15 minutes. Each
   run submits a scan at most every {{.scanIntervalMinutes}} minutes
-  (`ScanIntervalMinutes` in the configuration profile — change it there to
-  retune without reinstalling).
+  (`ScanIntervalMinutes` in the configuration profile — change it there
+  without reinstalling).
 - Installs a LaunchDaemon (`ai.obot.obot-sentry.hook-install`) that runs as
   root at load and hourly. It converges the managed local-agent audit hooks for
   the signed-in user, so hooks are re-checked for drift every hour.
 - Prepares `/Library/Application Support/obot/obot-sentry`, where the device
-  identity shared by every user on the Mac is stored.
+  identity shared by every user on the device is stored.
 
-Upgrades re-upload the same file name and reload both launchd jobs, carrying the
-configuration forward: the profiles are untouched by an app update, and the
-device identity and scan state live outside the package.
+## Verify the install
+
+1. Ensure the package was installed:
+
+   ```sh
+   pkgutil --pkg-info ai.obot.obot-sentry
+   ```
+
+   This prints the identifier, version, and install time from the receipt. No
+   receipt at all means the app never installed.
+
+   If there is no package receipt, the install never ran. Confirm the Intune
+   management agent is installed at `/Library/Intune/Microsoft Intune Agent.app`,
+   then force a check-in with:
+
+   ```sh
+   sudo killall IntuneMdmAgent
+   ```
+
+   Alternatively, the user can open Company Portal and select **Check settings**.
+
+   If the app reports installed but the receipt is missing, check the contents of `/var/log/install.log`
+   to debug further.
+
+2. Ensure the settings arrived:
+
+   ```sh
+   sudo defaults read /Library/Managed\ Preferences/ai.obot.obot-sentry
+   ```
+
+   If delivered correctly, this should display the latest settings.
+
+3. Ensure both launchd jobs are loaded:
+
+   ```sh
+   launchctl print "gui/$(stat -f %u /dev/console)/ai.obot.obot-sentry.scan" | grep -E 'state|program|runs|last exit code'
+   sudo launchctl print system/ai.obot.obot-sentry.hook-install | grep -E 'state|program|runs|last exit code'
+   ```
+
+   This will produce the following output:
+
+   - `state = not running` is the healthy idle state. Both jobs run on a schedule
+     and exit rather than staying resident, so `running` is only what you catch
+     mid-run.
+   - `program = /usr/local/bin/obot-sentry` confirms the job points at the
+     installed binary.
+   - `runs` counts completed launches.
+   - `last exit code = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the values in the profile from step 2.
+
+4. Ensure scans are landing:
+
+   To get the results of the latest scan attempt, run the following command:
+
+   ```sh
+   sudo cat "/Users/$(stat -f %Su /dev/console)/Library/Caches/obot/obot-sentry/scan.json"
+   ```
+
+   `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
+   `error` with `lastError` carrying the reason.
+
+   The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+
+   To view the last attempt, run:
+
+   ```sh
+   logs="/Users/$(stat -f %Su /dev/console)/Library/Caches/obot/obot-sentry/scan-logs"; sudo cat "$logs/$(sudo ls "$logs" | tail -1)"
+   ```
+
+   The hook-install daemon keeps no state file. It prints its convergence table to
+   the unified log on every hourly run:
+
+   ```sh
+   log show --last 2h --predicate 'process == "obot-sentry"'
+   ```
+{{if .enforcementEnabled}}
+## Tool-call enforcement
+
+Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
+allowlist before it runs. The check is a single request to Obot, and it is
+**fail-closed**: if Obot cannot be reached, the device is not enrolled, or the
+hook cannot tell which MCP server a call targets, the call is blocked.
+
+- Blocking a call never *approves* one. Your users' agent approval prompts still
+  apply to everything that is allowed.
+- Visual Studio Code is not supported for enforcement. Its audit hook is unaffected.
+- An MCP server can be allowlisted by URL, by its `npx`/`uvx` package, or — for a
+  claude.ai connector — by display name. A stdio server started from a local
+  executable path presents none of those, so it cannot be allowlisted and is
+  blocked by design.
+- Turning enforcement off in Obot stops the blocking immediately, for all devices, even
+  before the hooks are removed from any device.
+{{end}}
+## Upgrades
+
+To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.pkg` file
+to the existing app and save. Devices pick it up on the management agent's next
+check-in.
+
+The profiles are separate. If the new download contains changed `.mobileconfig`
+files, re-upload them to the same profiles.
 
 ## Uninstall
 
-Uninstall in this order: remove the hooks first, then the agent. Step 2 runs
-`hook-uninstall` before it removes anything, so the hooks go either way.
+1. Add `uninstall.sh` as a shell script under *Devices > macOS > Scripts > Add*,
+   and set **Run script as signed-in user** to **No**.
 
-### 1. Remove the hooks
+2. Assign it to the targets you are removing Obot Sentry from. It is idempotent,
+   so a device that already ran it is unaffected.
 
-While the app is still installed, run this as a **shell script** (*Devices >
-Scripts > Add > macOS*) with **Run script as signed-in user** set to **No**,
-while the target user is the active console user:
-
-```sh
-/usr/local/bin/obot-sentry hook-uninstall
-```
-
-This removes every hook entry marked `--managed-by obot-sentry` from the
-machine-wide files and the active user's files while preserving third-party
-hooks. Repeat it for each user on shared Macs. It deliberately preserves
-unmarked Codex feature pins and VS Code `chat.hookFilesLocations` values; remove
-those separately if desired.
+3. Once the script has run everywhere, unassign the app and both configuration
+   profiles.
 
 Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
-
-### 2. Remove the agent
-
-Unassign the app and both configuration profiles, then run `uninstall.sh` on
-each device as a **shell script** (*Devices > Scripts > Add > macOS*), leaving
-**Run script as signed-in user** set to **No**. It runs `hook-uninstall` first,
-then unloads both launchd jobs and removes the binary, the plists, the package
-receipt, the shared device identity, and every user's scan state. It is
-idempotent, so a device that already ran it is unaffected.
-
-A script is the only route: Intune's PKG app type has no **Uninstall**
-assignment, and an app the Intune agent installed stays on the device when that
-device is retired. Run this before retiring a Mac, while it is still managed.
-
-To run it by hand on one device instead:
-
-```sh
-sudo bash uninstall.sh
-```

@@ -1,68 +1,110 @@
-# Deploy Obot Sentry with Microsoft Intune
+# Deploy Obot Sentry to Windows with Microsoft Intune
 
-`obot-sentry.intunewin` is the obot-sentry device agent (version
-{{.obotSentryVersion}}) packaged as an Intune **Windows app (Win32)**.
-The file names are stable across versions, so upgrades never require
-editing the install command.
+This install package contains:
 
-1. **Add the app.** In the Intune admin center, go to *Apps > Windows >
-   Add > Windows app (Win32)* and upload the `.intunewin` file.
+- `obot-sentry.intunewin` — the obot-sentry device agent (version
+  {{.obotSentryVersion}}), packaged as an Intune **Windows app (Win32)**.
 
-2. **Install command** — paste the following, replacing
-   `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+## 1. Add the app
+
+1. In the Intune admin center, go to *Apps > Windows > Add > Windows app
+   (Win32)* and upload `obot-sentry.intunewin`.
+
+2. Set the **Install command**, replacing `REPLACE_WITH_ENROLLMENT_KEY` with
+   your enrollment key:
 
    ```
    msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
    ```
 {{if .enforcementEnabled}}
-   `ENFORCEMENT=1` turns on tool-call enforcement by writing
-   `EnforcementEnabled` to the registry; the hook task converges the enforcement
-   hooks from that value at logon and hourly. Two consequences worth knowing
-   before you assign the app:
-
-   - **Keep the property in the command.** Supersedence reuses it for upgrades,
-     and a command without `ENFORCEMENT=1` writes 0 and stops enforcing.
-   - **Devices already installed do not pick this up from Intune alone.** They
-     have the old command's registry value until the app upgrades. To enable
-     enforcement on them now, push `EnforcementEnabled` as a `REG_DWORD` under
-     `HKLM\SOFTWARE\Obot\obot-sentry` with a configuration profile or a
-     remediation script — the hook task applies it on its next run.
+   `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
+   task reads at logon and hourly. Keep the property in the command —
+   supersedence reuses it for upgrades, and a command without it writes 0 and
+   stops enforcing. Devices already installed keep the old command's value until
+   the app upgrades; to turn enforcement on there now, push `EnforcementEnabled`
+   as a `REG_DWORD` under `HKLM\SOFTWARE\Obot\obot-sentry` with a configuration
+   profile or a remediation script.
 {{end}}
-3. **Uninstall command:**
+3. Set the **Uninstall command**:
 
    ```
    msiexec /x "obot-sentry.msi" /qn
    ```
 
-   This removes the agent and its scheduled tasks, so no further hook
-   convergence happens, but it does not remove existing hook configuration.
-   Run `hook-uninstall` first — see **Uninstall** below.
+   This leaves hook configuration in place — see **Uninstall**.
 
-4. **Install behavior:** System. **Detection rule:** keep the MSI product
-   code rule Intune fills in automatically from the package.
+4. Set **Install behavior** to **System**, and keep the MSI product code
+   **detection rule** Intune fills in from the package.
 
-5. **Assign** the app to the device groups that should report to this
-   configuration. Devices install the agent on their next check-in and
-   appear in Obot as scans arrive.
+5. In the **Assignments** tab, add the users, groups, or devices you'd like to
+   install Obot Sentry to as **Required**.
 
 ## What the installer does
 
 - Installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`.
-- Writes the deployment configuration from the install command's
-  properties to `HKLM\SOFTWARE\Obot\obot-sentry`.
-- Registers a machine-wide scheduled task that runs in each signed-in
-  user's session, as that user, at logon and every 10 minutes. Each run
-  submits a scan at most every {{.scanIntervalMinutes}} minutes
-  (`ScanIntervalMinutes` in the registry — change it there to retune
-  without reinstalling).
-- Registers a second machine-wide scheduled task running as SYSTEM that
-  executes `obot-sentry hook-install` at logon and hourly. It converges the
-  managed local-agent hooks for the active console user, so hooks appear
-  shortly after each sign-in and are re-checked hourly for drift. The task's
-  argument list is fixed, so it reads `EnforcementEnabled` from the registry to
-  decide whether to install the enforcement hooks — which is what makes the
-  toggle changeable without repackaging the app.{{if .enforcementEnabled}}
+- Writes the deployment configuration from the install command's properties to
+  `HKLM\SOFTWARE\Obot\obot-sentry`.
+- Registers a machine-wide scheduled task (`Obot Sentry Scan`) that runs in each
+  signed-in user's session, as that user, at logon and every 10 minutes. Each
+  run submits a scan at most every {{.scanIntervalMinutes}} minutes
+  (`ScanIntervalMinutes` in the registry — change it there without
+  reinstalling).
+- Registers a second machine-wide scheduled task (`Obot Sentry Hook Install`)
+  running as SYSTEM at logon and hourly. It converges the managed local-agent
+  hooks for the active console user, reading `EnforcementEnabled` from the
+  registry on every run so the toggle changes without repackaging the app.
 
+## Verify the install
+
+1. Ensure the agent was installed:
+
+   ```powershell
+   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" version
+   ```
+
+   This prints the installed version. An error means the agent never installed.
+
+   If the agent was never installed, check the contents of
+   `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\IntuneManagementExtension.log`
+   to debug further.
+
+2. Ensure the settings arrived:
+
+   ```powershell
+   Get-ItemProperty 'HKLM:\SOFTWARE\Obot\obot-sentry'
+   ```
+
+   If delivered correctly, this should display the latest settings.
+
+3. Ensure both scheduled tasks are registered:
+
+   ```powershell
+   Get-ScheduledTask -TaskName 'Obot Sentry Scan','Obot Sentry Hook Install' | Get-ScheduledTaskInfo
+   ```
+
+   This will produce the following output:
+
+   - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
+     hourly for the hook task, and at each logon for both.
+   - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the registry values from step 2. `267011`
+     means the task has not run yet.
+   - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
+     was due; the next run catches up.
+
+4. Ensure scans are landing:
+
+   To get the results of the latest scan attempt, run the following command:
+
+   ```powershell
+   Get-Content "$env:LOCALAPPDATA\obot\obot-sentry\scan.json"
+   ```
+
+   `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
+   `error` with `lastError` carrying the reason.
+
+   The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
+{{if .enforcementEnabled}}
 ## Tool-call enforcement
 
 Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
@@ -80,42 +122,33 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 - Turning enforcement off in Obot stops the blocking immediately, for all devices, even
   before the hooks are removed from any device.
 {{end}}
+## Upgrades
 
-Upgrades re-run the same install command, so assignments configured with
-supersedence carry the configuration forward automatically.
+To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.intunewin`
+file to the existing app and save. This will perform an in-place upgrade.
 
 ## Uninstall
 
-Uninstall in this order: remove the hooks first, then the agent.
+Remove the hooks first, then the agent. The MSI's uninstall unregisters both
+scheduled tasks but leaves hook configuration in place, so the order matters.
 
-### 1. Remove the hooks
+1. While the agent is still installed, run this from an elevated remediation
+   script:
 
-Before uninstalling the MSI, run this from an elevated remediation script while
-the target user is the active console user:
+   ```powershell
+   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
+   ```
 
-```powershell
-& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
-```
+2. Remove the users, groups, or devices you are removing it from from the app's
+   **Required** assignment. A target left in both **Required** and **Uninstall**
+   resolves as Required, and the uninstall never runs.
 
-This removes every hook entry marked `--managed-by obot-sentry` from the
-machine-wide files and the active user's files while preserving third-party
-hooks. Repeat it for each user on shared devices. It deliberately preserves
-unmarked Codex feature pins and VS Code `chat.hookFilesLocations` values; remove
-those separately if desired.
+3. Add the same targets to the app's **Uninstall** assignment. That runs the
+   uninstall command from **1. Add the app**, removing `obot-sentry.exe`, its
+   registry configuration, and both scheduled tasks.
 
-Restart the agents afterward to drop the hooks.
-
-### 2. Remove the agent
-
-Uninstall the app from the device with Intune — either an uninstall assignment
-or removing the device from the app's assignments — which runs the uninstall
-command from step 3 above:
-
-```
-msiexec /x "obot-sentry.msi" /qn
-```
-
-That removes `obot-sentry.exe`, its registry configuration, and both scheduled
-tasks. The per-device state under `%ProgramData%\obot\obot-sentry` and
-`%LOCALAPPDATA%\obot\obot-sentry` is left behind; delete it with a remediation
+The per-device state under `%ProgramData%\obot\obot-sentry` and
+`%LOCALAPPDATA%\obot\obot-sentry` is left behind. Delete it with a remediation
 script if you want the device identity and scan state gone too.
+
+Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.

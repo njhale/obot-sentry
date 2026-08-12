@@ -1,43 +1,103 @@
 # Install Obot Sentry on Windows
 
-## MSI
+Install Obot Sentry on a Windows device without an MDM. This install package
+contains:
 
-The MSI sets up Obot Sentry to run automatically. It:
+- `obot-sentry.msi` — the installer (version {{.obotSentryVersion}}). Installs
+  the agent and schedules scans and hook convergence, exactly as the MDM
+  channel does.
+- `obot-sentry.exe` — the bare binary, for installing by hand instead.
 
-- registers scheduled tasks that scan the device every {{.scanIntervalMinutes}} minutes
-- installs and maintains the audit hooks — at logon and hourly{{if .enforcementEnabled}}
-- installs and maintains the tool-call enforcement hooks (see
-  [Tool-call enforcement](#tool-call-enforcement)){{end}}
-- handles upgrades and uninstalls out of the box.
+Everything below needs an Administrator PowerShell.
 
-Open PowerShell as Administrator and run the installer, replacing
-`REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key:
+## Installer (MSI)
 
-### Install
+1. Install the agent, replacing `REPLACE_WITH_ENROLLMENT_KEY` with your
+   enrollment key:
 
-```powershell
-msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
-```
+   ```powershell
+   msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
+   ```
 {{if .enforcementEnabled}}
-`ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which is what the
-hook task reads. Keep it in the command you use for **upgrades** too: an install
-command without it writes 0 and stops enforcing.
+   `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
+   task reads. Keep it in the command you use for upgrades too: an install
+   command without it writes 0 and stops enforcing.
 {{end}}
-### Trigger first scan immediately (Optional)
+2. Trigger the first scan without waiting for the schedule (optional):
 
-To run a scan immediately after install, run the following command:
+   ```powershell
+   Start-ScheduledTask -TaskName 'Obot Sentry Scan'
+   ```
 
-```powershell
-Start-ScheduledTask -TaskName 'Obot Sentry Scan'
-```
+## What the installer does
+
+- Installs `obot-sentry.exe` under `C:\Program Files\Obot\obot-sentry`.
+- Writes the deployment configuration from the install command's properties to
+  `HKLM\SOFTWARE\Obot\obot-sentry`.
+- Registers a machine-wide scheduled task (`Obot Sentry Scan`) that runs in each
+  signed-in user's session, as that user, at logon and every 10 minutes. Each
+  run submits a scan at most every {{.scanIntervalMinutes}} minutes — change
+  `ScanIntervalMinutes` in the registry without reinstalling.
+- Registers a second machine-wide scheduled task (`Obot Sentry Hook Install`)
+  running as SYSTEM at logon and hourly, converging the managed local-agent
+  hooks for the active console user. It reads `EnforcementEnabled` from the
+  registry on every run, so turning enforcement on or off there takes effect
+  without reinstalling.
+- Handles upgrades and uninstalls out of the box.
+
+## Verify the install
+
+1. Ensure the agent was installed:
+
+   ```powershell
+   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" version
+   ```
+
+   This prints the installed version.
+
+2. Ensure the settings are readable:
+
+   ```powershell
+   Get-ItemProperty 'HKLM:\SOFTWARE\Obot\obot-sentry'
+   ```
+
+   If configured correctly, this should display the values from step 1.
+
+3. Ensure both scheduled tasks are registered:
+
+   ```powershell
+   Get-ScheduledTask -TaskName 'Obot Sentry Scan','Obot Sentry Hook Install' | Get-ScheduledTaskInfo
+   ```
+
+   This will produce the following output:
+
+   - `LastRunTime` climbs on schedule — every 10 minutes for the scan task,
+     hourly for the hook task, and at each logon for both.
+   - `LastTaskResult = 0` means the last run succeeded. Non-zero is usually a
+     configuration problem — recheck the registry values from step 2. `267011`
+     means the task has not run yet.
+   - `NumberOfMissedRuns` above 0 means the device was asleep or off when a run
+     was due; the next run catches up.
+
+4. Ensure scans are landing:
+
+   To get the results of the latest scan attempt, run the following command:
+
+   ```powershell
+   Get-Content "$env:LOCALAPPDATA\obot\obot-sentry\scan.json"
+   ```
+
+   `lastSubmitAt` records the last successful submission, and `lastStatus` is `ok` or
+   `error` with `lastError` carrying the reason.
+
+   The adjacent `scan-logs` directory retains up to 14 days of the most recent scan attempts.
 
 ## Standalone binary (Alternate)
 
-Manually install `obot-sentry.exe` to run one-off scans or install hooks
-yourself. Use this to try Obot Sentry without the automated scanning and
-hook maintenance the MSI sets up.
+Install `obot-sentry.exe` by hand to run one-off scans or install hooks
+yourself.
 
-1. Open PowerShell as Administrator and install the binary:
+1. Install the binary:
 
    ```powershell
    New-Item -ItemType Directory -Force "C:\Program Files\Obot\obot-sentry" | Out-Null
@@ -62,8 +122,8 @@ hook maintenance the MSI sets up.
    & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" enroll
    ```
 
-   Enroll verifies the configuration and prints the device ID this
-   machine reports as.
+   Enroll verifies the configuration and prints the device ID this machine
+   reports as. It is idempotent, so running it again is harmless.
 
 ### Run a scan
 
@@ -71,15 +131,18 @@ hook maintenance the MSI sets up.
 & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" scan --submit --force
 ```
 
-Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a run within that window skips submission. `--force` bypasses the interval, so a scan you run by hand always submits.
+Scans are submitted at most once every {{.scanIntervalMinutes}} minutes, and a
+run within that window skips submission. `--force` bypasses the interval,
+causing the scan to be submitted immediately. The same command works after an MSI
+install.
 
 ### Install hooks
 
 ```powershell
 & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-install{{if .enforcementEnabled}} --enforce{{end}}
 ```
-
-{{if .enforcementEnabled}}## Tool-call enforcement
+{{if .enforcementEnabled}}
+## Tool-call enforcement
 
 Each tool call in Claude Code, Codex, and Cursor is checked against Obot's
 allowlist before it runs. The check is a single request to Obot, and it is
@@ -102,46 +165,40 @@ value and let the hook task reconverge:
 ```powershell
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Obot\obot-sentry' -Name EnforcementEnabled -Type DWord -Value 0
 ```
+{{end}}
+## Uninstall
 
-{{end}}## Uninstall
+Remove the hooks first, then Obot Sentry itself. Uninstalling the MSI
+unregisters both scheduled tasks but leaves hook configuration in place, so the
+order matters.
 
-Uninstall in this order: remove the hooks first, then Obot Sentry itself.
-Nothing in step 2 touches the hook configuration.
+1. Remove the Obot Sentry-managed hooks, preserving third-party hooks:
 
-### 1. Remove the hooks
+   ```powershell
+   & "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
+   ```
 
-From an Administrator PowerShell, remove every Obot Sentry-managed hook while
-preserving third-party hooks:
+2. If you installed the MSI, uninstall it — this also unregisters the scheduled
+   tasks, so no further scans or hook convergence happen:
 
-```powershell
-& "C:\Program Files\Obot\obot-sentry\obot-sentry.exe" hook-uninstall
-```
+   ```powershell
+   msiexec /x "obot-sentry.msi" /qn
+   ```
 
-The command removes only entries marked `--managed-by obot-sentry`; it does not
-delete files or change unmarked supporting settings. If desired, manually remove
-the Codex `[features]` pins `hooks = true` and
-`non_prefixed_mcp_tool_names = false`, and remove the Obot-added values under VS
+   If you installed the standalone binary, remove the binary, the configuration,
+   and the device identity and scan state:
+
+   ```powershell
+   Remove-Item -Recurse -Force "C:\Program Files\Obot\obot-sentry" -ErrorAction SilentlyContinue
+   Remove-Item -Recurse -Force "HKLM:\SOFTWARE\Obot\obot-sentry" -ErrorAction SilentlyContinue
+   Remove-Item -Recurse -Force "$env:ProgramData\obot\obot-sentry" -ErrorAction SilentlyContinue
+   Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obot\obot-sentry" -ErrorAction SilentlyContinue
+   ```
+
+Hook removal preserves third-party hooks and only touches entries marked
+`--managed-by obot-sentry`; it leaves unmarked supporting settings alone. Remove
+those by hand if you want them gone: the Codex `[features]` pins `hooks = true`
+and `non_prefixed_mcp_tool_names = false`, and the Obot-added values under VS
 Code's `chat.hookFilesLocations`.
 
-The per-user files (`.claude`, `.copilot`, VS Code settings) exist once per
-signed-in user, so repeat for each user on a shared machine. Restart Claude
-Code, Codex, VS Code, and Cursor afterward to drop the hooks.
-
-### 2. Remove Obot Sentry
-
-If you installed the MSI, uninstall it — this also unregisters the scheduled
-tasks, so no further scans or hook convergence happen:
-
-```powershell
-msiexec /x "obot-sentry.msi" /qn
-```
-
-If you installed the standalone binary, remove the binary, the configuration,
-and the device identity and scan state:
-
-```powershell
-Remove-Item -Recurse -Force "C:\Program Files\Obot\obot-sentry" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "HKLM:\SOFTWARE\Obot\obot-sentry" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "$env:ProgramData\obot\obot-sentry" -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obot\obot-sentry" -ErrorAction SilentlyContinue
-```
+Restart Claude Code, Codex, VS Code, and Cursor afterward to drop the hooks.
