@@ -263,6 +263,8 @@ build/
     ai.obot.obot-sentry.pppc.mobileconfig   # Full Disk Access grant (MDM channels)
     intune/              # Intune channel: instructions
       INSTRUCTIONS.md.tmpl
+    jamf/                # Jamf Pro channel: instructions
+      INSTRUCTIONS.md.tmpl
     manual/              # manual channel: instructions for the pkg + bare binary
       INSTRUCTIONS.md.tmpl
 ```
@@ -349,11 +351,11 @@ pointing it at `dist/mdm-assets` serves a local build.
 | Platform | installer | scheduling | tenant config |
 |---|---|---|---|
 | Intune (Windows) | `.msi` wrapped as `.intunewin` | per-user scan task (logon + 10-min poll, submissions throttled to `ScanIntervalMinutes`) plus elevated SYSTEM hook-install task (logon + hourly) | MSI properties → `HKLM\SOFTWARE\Obot\obot-sentry` |
-| Intune (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + hourly) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
+| Intune, Jamf Pro (macOS) | `.pkg` | per-user scan LaunchAgent (login + 15-min poll matching the `ScanIntervalMinutes` floor, submissions throttled to `ScanIntervalMinutes`) plus root hook-install LaunchDaemon (load + hourly) | configuration profile → `/Library/Managed Preferences/ai.obot.obot-sentry.plist` |
 | Manual (Windows) | `.msi`, or the bare exe | as above for the MSI | MSI properties, or `OBOT_SENTRY_*` environment variables |
 | Manual (macOS) | `.pkg`, or the bare universal binary | as above for the pkg | `sudo defaults write /Library/Preferences/ai.obot.obot-sentry`, or `OBOT_SENTRY_*` environment variables |
 
-The macOS pkg is identical across both channels — the Intune channel adds a
+The macOS pkg is identical across all three channels — the MDM channels add a
 configuration profile and a PPPC (Full Disk Access) profile, which macOS only
 honors from a user-approved MDM, so the DIY channel grants that access by hand
 instead.

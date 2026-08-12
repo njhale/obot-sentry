@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 	Deployment configuration for Obot Sentry, delivered as managed
-	preferences. Obot renders the server URL and scan interval into this
-	profile; the admin replaces REPLACE_WITH_ENROLLMENT_KEY before
-	uploading it, so the enrollment key never passes through obot's
+	preferences. Obot renders the server URL, scan interval, and enforcement
+	toggle into this profile; the admin replaces REPLACE_WITH_ENROLLMENT_KEY
+	before uploading it, so the enrollment key never passes through obot's
 	rendering.
+
+	EnforcementEnabled is server-owned: obot re-renders this profile whenever
+	the toggle flips, so re-download and re-upload to change it on devices.
+	The hook-install LaunchDaemon reads it on every run, so no reinstall is
+	needed once the new profile lands.
 
 	The profile lands at /Library/Managed Preferences/ai.obot.obot-sentry.plist,
 	which pkg/mdmconfig reads ahead of the /Library/Preferences fallback the
@@ -22,7 +27,7 @@
 	<array>
 		<dict>
 			<key>PayloadDescription</key>
-			<string>Obot server URL, enrollment key, and scan interval for the Obot Sentry device agent.</string>
+			<string>Obot server URL, enrollment key, scan interval, and enforcement toggle for the Obot Sentry device agent.</string>
 			<key>PayloadDisplayName</key>
 			<string>Obot Sentry - Managed Settings</string>
 			<key>PayloadIdentifier</key>
@@ -48,6 +53,8 @@
 								<string>REPLACE_WITH_ENROLLMENT_KEY</string>
 								<key>ScanIntervalMinutes</key>
 								<integer>{{.scanIntervalMinutes}}</integer>
+								<key>EnforcementEnabled</key>
+								<{{if .enforcementEnabled}}true{{else}}false{{end}}/>
 							</dict>
 						</dict>
 					</array>
@@ -56,7 +63,7 @@
 		</dict>
 	</array>
 	<key>PayloadDescription</key>
-	<string>Configures the Obot Sentry device agent: the Obot server it reports to, the enrollment key it authenticates with, and how often each signed-in user submits a scan. Replace REPLACE_WITH_ENROLLMENT_KEY before uploading.</string>
+	<string>Configures the Obot Sentry device agent: the Obot server it reports to, the enrollment key it authenticates with, how often each signed-in user submits a scan, and whether the tool-call enforcement hooks are installed. Replace REPLACE_WITH_ENROLLMENT_KEY before uploading.</string>
 	<key>PayloadDisplayName</key>
 	<string>Obot Sentry - Configuration</string>
 	<key>PayloadIdentifier</key>
