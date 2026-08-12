@@ -41,45 +41,6 @@ type gooseExtension struct {
 	Enabled bool           `yaml:"enabled"`
 }
 
-type gooseScanner struct{}
-
-func (gooseScanner) Name() string { return "goose" }
-
-func (gooseScanner) Presence(platform string) presenceDef {
-	return presenceDef{binaries: []string{"goose"}, configPaths: []string{gooseConfigDir(platform)}}
-}
-
-func (gooseScanner) GlobalConfigs(platform string) []string {
-	return []string{gooseGlobalConfigRel(platform)}
-}
-
-func (gooseScanner) ProjectConfigs() []string { return nil }
-
-func (gooseScanner) ScanProject(*state, string) observations { return observations{} }
-
-func (gooseScanner) ScanHome(s *state) observations {
-	configRel := gooseGlobalConfigRel(s.platform)
-	cfg, ok := readYAML[gooseConfig](s.fsys, configRel)
-	if !ok {
-		return observations{}
-	}
-	configPath := s.addFileOrAbs(configRel)
-
-	servers := make([]types.DeviceScanMCPServer, 0, len(cfg.Extensions))
-	for _, key := range sortedKeys(cfg.Extensions) {
-		ext := cfg.Extensions[key]
-		if !ext.Enabled {
-			continue
-		}
-		obs, ok := ext.toServer(key, configPath)
-		if !ok {
-			continue
-		}
-		servers = append(servers, obs)
-	}
-	return observations{servers: servers}
-}
-
 // toServer materializes a Goose extension. Only stdio/sse/streamable_http
 // types are surfaced (other types are MCP-irrelevant).
 func (e gooseExtension) toServer(key, configPath string) (types.DeviceScanMCPServer, bool) {
@@ -118,4 +79,26 @@ func (e gooseExtension) toServer(key, configPath string) (types.DeviceScanMCPSer
 		HeaderKeys: sortedKeys(e.Headers),
 		ConfigHash: mcpConfigHash(name, transport, "", nil, e.URI),
 	}, true
+}
+
+// gooseServers reads Goose's config.yaml. Every extension is gated on an
+// explicit `enabled: true`.
+func gooseServers(s *state, rel, _ string) observations {
+	cfg, ok := readYAML[gooseConfig](s.fsys, rel)
+	if !ok {
+		return observations{}
+	}
+	configPath := s.addFileOrAbs(rel)
+
+	servers := make([]types.DeviceScanMCPServer, 0, len(cfg.Extensions))
+	for _, key := range sortedKeys(cfg.Extensions) {
+		ext := cfg.Extensions[key]
+		if !ext.Enabled {
+			continue
+		}
+		if server, ok := ext.toServer(key, configPath); ok {
+			servers = append(servers, server)
+		}
+	}
+	return observations{servers: servers}
 }

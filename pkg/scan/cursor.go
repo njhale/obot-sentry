@@ -16,40 +16,12 @@ const (
 	cursorMarketplace       = "cursor-public"
 )
 
-type cursorScanner struct{}
-
-func (cursorScanner) Name() string { return "cursor" }
-
-func (cursorScanner) Presence(string) presenceDef {
-	return presenceDef{
-		binaries:    []string{"cursor"},
-		appBundles:  []string{"Cursor.app"},
-		installDirs: []string{"AppData/Local/Programs/cursor", `C:\Program Files\cursor`},
-		configPaths: []string{".cursor"},
-	}
-}
-
-func (cursorScanner) GlobalConfigs(string) []string { return []string{cursorGlobalConfigRel} }
-
-func (cursorScanner) ProjectConfigs() []string { return []string{".cursor/mcp.json"} }
-
-func (c cursorScanner) ScanHome(s *state) observations {
-	obs := observations{servers: emitJSONServers(s, cursorGlobalConfigRel, "mcpServers", "cursor", "")}
-	obs.add(c.scanPlugins(s))
-	return obs
-}
-
-func (cursorScanner) ScanProject(s *state, configRel string) observations {
-	projectPath := s.abs(path.Dir(path.Dir(configRel)))
-	return observations{servers: emitJSONServers(s, configRel, "mcpServers", "cursor", projectPath)}
-}
-
 // scanPlugins walks ~/.cursor/plugins/cache/cursor-public/<name>/<hash>/
 // for .cursor-plugin/plugin.json manifests. Dedupes by plugin name
 // (first hash dir wins) and resolves enabled state from
 // .cursor/settings.json (two key forms: "<name>@cursor-public" and
 // "<name>").
-func (cursorScanner) scanPlugins(s *state) observations {
+func cursorPlugins(s *state, _, _ string) observations {
 	plugins, err := fs.ReadDir(s.fsys, cursorPluginCacheRel)
 	if err != nil {
 		return observations{}
@@ -104,4 +76,10 @@ func (cursorScanner) scanPlugins(s *state) observations {
 		}
 	}
 	return obs
+}
+
+// cursorServers reads a Cursor mcp.json. Home and project scope share
+// one path and one shape.
+func cursorServers(s *state, rel, projectPath string) observations {
+	return observations{servers: emitJSONServers(s, rel, "mcpServers", "cursor", projectPath)}
 }

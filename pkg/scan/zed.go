@@ -2,7 +2,6 @@ package scan
 
 import (
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/obot-platform/obot/apiclient/types"
@@ -48,48 +47,6 @@ type zedContextServer struct {
 	Env     map[string]any `json:"env"`
 	Headers map[string]any `json:"headers"`
 	Enabled *bool          `json:"enabled"`
-}
-
-type zedScanner struct{}
-
-func (zedScanner) Name() string { return "zed" }
-
-func (zedScanner) Presence(platform string) presenceDef {
-	return presenceDef{
-		binaries:    []string{"zed"},
-		appBundles:  []string{"Zed.app"},
-		installDirs: []string{"AppData/Local/Programs/Zed", `C:\Program Files\Zed`},
-		configPaths: []string{path.Dir(zedSettingsRel(platform))},
-	}
-}
-
-func (zedScanner) GlobalConfigs(platform string) []string {
-	return []string{zedSettingsRel(platform)}
-}
-
-func (zedScanner) ProjectConfigs() []string { return []string{".zed/settings.json"} }
-
-func (zedScanner) ScanHome(s *state) observations {
-	settingsRel := zedSettingsRel(s.platform)
-	cfg, ok := readJSON[zedSettings](s.fsys, settingsRel)
-	var configPath string
-	if ok {
-		configPath = s.addFileOrAbs(settingsRel)
-	}
-	emitted, servers := emitZedContextServers(cfg.ContextServers, configPath, "")
-	servers = append(servers, mergeZedExtensions(s, configPath, emitted)...)
-	return observations{servers: servers}
-}
-
-func (zedScanner) ScanProject(s *state, configRel string) observations {
-	cfg, ok := readJSON[zedSettings](s.fsys, configRel)
-	if !ok {
-		return observations{}
-	}
-	configPath := s.addFileOrAbs(configRel)
-	projectPath := s.abs(path.Dir(path.Dir(configRel)))
-	_, servers := emitZedContextServers(cfg.ContextServers, configPath, projectPath)
-	return observations{servers: servers}
 }
 
 // emitZedContextServers parses Zed's context_servers map. Returns the
@@ -177,4 +134,28 @@ func mergeZedExtensions(s *state, configPath string, existing map[string]bool) [
 		})
 	}
 	return out
+}
+
+// zedHomeServers reads Zed's settings.json and merges in the installed
+// mcp-server-* extensions, which are servers Zed knows about without a
+// context_servers entry.
+func zedHomeServers(s *state, rel, _ string) observations {
+	cfg, ok := readJSON[zedSettings](s.fsys, rel)
+	var configPath string
+	if ok {
+		configPath = s.addFileOrAbs(rel)
+	}
+	emitted, servers := emitZedContextServers(cfg.ContextServers, configPath, "")
+	return observations{servers: append(servers, mergeZedExtensions(s, configPath, emitted)...)}
+}
+
+// zedProjectServers reads a project .zed/settings.json. Extensions are
+// installed per user, not per project, so they are not merged here.
+func zedProjectServers(s *state, rel, projectPath string) observations {
+	cfg, ok := readJSON[zedSettings](s.fsys, rel)
+	if !ok {
+		return observations{}
+	}
+	_, servers := emitZedContextServers(cfg.ContextServers, s.addFileOrAbs(rel), projectPath)
+	return observations{servers: servers}
 }

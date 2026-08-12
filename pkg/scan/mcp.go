@@ -89,7 +89,7 @@ func firstNonEmpty(ss ...string) string {
 // server per enabled entry under the given top-level dict key.
 // projectPath is the project root for project-scope configs, "" for
 // global. Used by JSON clients with no per-client quirks (Cursor,
-// VS Code, Windsurf).
+// VS Code).
 //
 // Only the servers key is decoded into the typed shape, so unrelated
 // top-level keys of any type (VS Code's `inputs` array, `$schema`,

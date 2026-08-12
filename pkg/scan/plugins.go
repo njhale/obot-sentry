@@ -232,6 +232,10 @@ func nestedSkills(s *state, installRel, client string) []skill {
 		return nil
 	}
 	var out []skill
+	// A plugin with one skill may put SKILL.md straight in skills/.
+	if sk, ok := ingestSkill(s, skillsRoot, []string{client}, ""); ok {
+		out = append(out, sk)
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue

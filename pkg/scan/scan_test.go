@@ -20,18 +20,25 @@ func mapRoot(files map[string]string) Root {
 	return Root{FS: mapfs, Path: "/home/test", Platform: "darwin", Primary: true}
 }
 
-// runScan scans an in-memory home with a neutralized presence
-// environment (no real $PATH, no /Applications).
+// runScan scans an in-memory home with host detection neutralized, so
+// only evidence inside the fixture counts.
 func runScan(t *testing.T, files map[string]string) types.DeviceScanManifest {
 	t.Helper()
 	return runScanRoots(t, []Root{mapRoot(files)})
 }
 
+// isolateHost points absolute Installed globs at an empty directory so
+// detection never sees the developer's real /Applications tree.
+func isolateHost(t *testing.T) {
+	t.Helper()
+	t.Setenv("OPENCLAW_PROFILE", "")
+	hostRoot = t.TempDir()
+	t.Cleanup(func() { hostRoot = "" })
+}
+
 func runScanRoots(t *testing.T, roots []Root) types.DeviceScanManifest {
 	t.Helper()
-	t.Setenv("PATH", t.TempDir())
-	appBundleDirs = []string{t.TempDir()}
-	t.Cleanup(func() { appBundleDirs = nil })
+	isolateHost(t)
 
 	manifest, err := Scan(context.Background(), Options{Roots: roots, MaxDepth: 8})
 	if err != nil {
@@ -54,6 +61,14 @@ func skillClients(manifest types.DeviceScanManifest, fileSuffix string) []string
 	return out
 }
 
+func clientNames(manifest types.DeviceScanManifest) []string {
+	out := make([]string, 0, len(manifest.Clients))
+	for _, c := range manifest.Clients {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
 func findClient(manifest types.DeviceScanManifest, name string) *types.DeviceScanClient {
 	for i, c := range manifest.Clients {
 		if c.Name == name {
@@ -67,46 +82,187 @@ func namedSkill(name string) string {
 	return "---\nname: " + name + "\ndescription: does things\n---\nbody\n"
 }
 
-// TestScan_SkillClientSets verifies that skills in shared directories
-// are attributed to every client that discovers that location — the
-// fix for a skill installed to ~/.agents/skills showing up under a
-// synthetic "multi" client instead of (among others) VS Code.
+// TestSkillDirs_ReadersResolve is the guard against the drift that made
+// antigravity unreportable: it appeared in the skills
+// table but had no client, so nothing could ever detect them and their
+// rows could only be conjured from a skill file.
+//
+// Readers are free-form strings so the table reads like the vendor docs
+// it's transcribed from; this is what keeps them honest.
+func TestSkillDirs_ReadersResolve(t *testing.T) {
+	for _, platform := range []string{"darwin", "linux", "windows"} {
+		known := map[string]bool{}
+		for _, c := range clients(platform) {
+			known[c.Name] = true
+		}
+		for _, table := range [][]Location{skillDirs, skillTrees} {
+			for _, loc := range table {
+				if loc.Scope == 0 {
+					t.Errorf("%s: %q has no scope", platform, loc.Path)
+				}
+				if len(loc.Readers) == 0 {
+					t.Errorf("%s: %q has no readers", platform, loc.Path)
+				}
+				for _, r := range loc.Readers {
+					if !known[r] {
+						t.Errorf("%s: %q is read by %q, which has no Client entry", platform, loc.Path, r)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestClients_Wellformed: every client needs a name and evidence, or it
+// can never be reported.
+func TestClients_Wellformed(t *testing.T) {
+	for _, platform := range []string{"darwin", "linux", "windows"} {
+		seen := map[string]bool{}
+		for _, c := range clients(platform) {
+			if c.Name == "" || c.Name == MultiClient {
+				t.Errorf("%s: bad client name %q", platform, c.Name)
+			}
+			if seen[c.Name] {
+				t.Errorf("%s: duplicate client %q", platform, c.Name)
+			}
+			seen[c.Name] = true
+			if len(c.Installed) == 0 {
+				t.Errorf("%s: client %q has no install evidence", platform, c.Name)
+			}
+		}
+	}
+}
+
+// TestScan_SkillClientSets verifies that a skill in a shared directory
+// is attributed to every client that both reads that location and is
+// actually on the device. Claude Code and Cursor are installed here
+// (runtime state); Codex, OpenCode, VS Code and Antigravity are not.
+//
+// This is the regression for obot#7288: attributing ~/.claude/skills to
+// all four documented readers reported clients that were never
+// installed.
 func TestScan_SkillClientSets(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".claude/history.jsonl":              "{}\n",
+		".cursor/ide_state.json":             "{}\n",
 		".agents/skills/doc/SKILL.md":        namedSkill("doc"),
 		".claude/skills/pdf/SKILL.md":        namedSkill("pdf"),
 		".gemini/config/skills/gem/SKILL.md": namedSkill("gem"),
 	})
 
-	if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"codex", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	// .agents/skills is read by codex, cursor, opencode and vscode; only
+	// cursor is here.
+	if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"cursor"}; !slices.Equal(got, want) {
 		t.Errorf("~/.agents/skills clients = %v, want %v", got, want)
 	}
-	if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"claude_code", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"claude_code", "cursor"}; !slices.Equal(got, want) {
 		t.Errorf("~/.claude/skills clients = %v, want %v", got, want)
 	}
-	if got, want := skillClients(manifest, ".gemini/config/skills/gem/SKILL.md"), []string{"antigravity"}; !slices.Equal(got, want) {
+	// Antigravity reads ~/.gemini/config/skills but isn't installed, so
+	// the skill is still inventoried, just unattributed.
+	if got, want := skillClients(manifest, ".gemini/config/skills/gem/SKILL.md"), []string{MultiClient}; !slices.Equal(got, want) {
 		t.Errorf("~/.gemini/config/skills clients = %v, want %v", got, want)
 	}
 
-	for _, sk := range manifest.Skills {
-		if sk.Client == "multi" {
-			t.Errorf("skill %q still attributed to the retired multi client", sk.Name)
-		}
-	}
-
-	// Every referenced client gets a clients[] row with HasSkills set.
-	for _, name := range []string{"vscode", "codex", "cursor", "opencode", "claude_code", "antigravity"} {
+	for _, name := range []string{"claude_code", "cursor"} {
 		c := findClient(manifest, name)
 		if c == nil {
-			t.Errorf("no clients[] row synthesized for %q", name)
+			t.Errorf("no clients[] row for installed client %q", name)
 			continue
 		}
 		if !c.HasSkills {
 			t.Errorf("HasSkills = false for %q", name)
 		}
 	}
-	if c := findClient(manifest, ""); c != nil {
-		t.Errorf("clients[] row synthesized for empty client name")
+	for _, name := range []string{"codex", "opencode", "vscode", "antigravity", MultiClient, ""} {
+		if c := findClient(manifest, name); c != nil {
+			t.Errorf("clients[] row for %q, which is not on the device: %+v", name, c)
+		}
+	}
+}
+
+// TestScan_Issue7288 reproduces both machines from the bug report.
+//
+// macOS: five clients installed and configured, plus skills in
+// ~/.claude/skills and ~/.agents/skills. OpenCode reads both directories
+// but is not on the device, and used to get a row anyway.
+//
+// Windows: only VS Code installed. ~/.claude exists because hook-install
+// created it, and holds a skill. claude_code, codex and cursor used to
+// be reported off the back of that one file.
+func TestScan_Issue7288(t *testing.T) {
+	t.Run("macos", func(t *testing.T) {
+		manifest := runScan(t, map[string]string{
+			".claude/history.jsonl":  "{}\n",
+			".claude/settings.json":  "{}\n", // hook-install's own file
+			".codex/installation_id": "x\n",
+			".cursor/ide_state.json": "{}\n",
+			"Library/Application Support/Code/User/globalStorage/state.db": "",
+			"Library/Application Support/Claude/Local Storage/x":           "",
+
+			".claude/skills/pdf/SKILL.md": namedSkill("pdf"),
+			".agents/skills/doc/SKILL.md": namedSkill("doc"),
+		})
+
+		if c := findClient(manifest, "opencode"); c != nil {
+			t.Errorf("opencode reported without being installed: %+v", c)
+		}
+		if got, want := clientNames(manifest), []string{"claude_code", "claude_desktop", "codex", "cursor", "vscode"}; !slices.Equal(got, want) {
+			t.Errorf("clients = %v, want %v", got, want)
+		}
+		// Both skills survive, attributed only to installed readers.
+		if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"claude_code", "cursor", "vscode"}; !slices.Equal(got, want) {
+			t.Errorf("~/.claude/skills clients = %v, want %v", got, want)
+		}
+		if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"codex", "cursor", "vscode"}; !slices.Equal(got, want) {
+			t.Errorf("~/.agents/skills clients = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("windows", func(t *testing.T) {
+		root := mapRoot(map[string]string{
+			".claude/settings.json":                            "{}\n", // hook-install's own file
+			".claude/skills/pdf/SKILL.md":                      namedSkill("pdf"),
+			".agents/skills/doc/SKILL.md":                      namedSkill("doc"),
+			"AppData/Roaming/Code/User/globalStorage/state.db": "",
+		})
+		root.Platform = "windows"
+		manifest := runScanRoots(t, []Root{root})
+
+		if got, want := clientNames(manifest), []string{"vscode"}; !slices.Equal(got, want) {
+			t.Errorf("clients = %v, want %v", got, want)
+		}
+		// VS Code reads both directories, so both skills stay attributed
+		// to it; only the uninstalled readers drop.
+		if got, want := skillClients(manifest, ".claude/skills/pdf/SKILL.md"), []string{"vscode"}; !slices.Equal(got, want) {
+			t.Errorf("~/.claude/skills clients = %v, want %v", got, want)
+		}
+		if got, want := skillClients(manifest, ".agents/skills/doc/SKILL.md"), []string{"vscode"}; !slices.Equal(got, want) {
+			t.Errorf("~/.agents/skills clients = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestScan_NoClientsInstalled: skills are never dropped just because
+// nothing that reads them is installed — they fall to the MultiClient
+// sentinel, which never becomes a clients[] row.
+func TestScan_NoClientsInstalled(t *testing.T) {
+	manifest := runScan(t, map[string]string{
+		".claude/settings.json":       "{}\n", // what hook-install writes
+		".claude/skills/pdf/SKILL.md": namedSkill("pdf"),
+		".agents/skills/doc/SKILL.md": namedSkill("doc"),
+	})
+
+	if len(manifest.Clients) != 0 {
+		t.Errorf("Clients = %+v, want none", manifest.Clients)
+	}
+	if len(manifest.Skills) != 2 {
+		t.Fatalf("want both skills inventoried, got %+v", manifest.Skills)
+	}
+	for _, sk := range manifest.Skills {
+		if sk.Client != MultiClient {
+			t.Errorf("skill %q attributed to %q, want %q", sk.Name, sk.Client, MultiClient)
+		}
 	}
 }
 
@@ -116,11 +272,15 @@ func TestScan_SkillClientSets(t *testing.T) {
 // and ProjectPath points at the enclosing project.
 func TestScan_ProjectSkills(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		"Library/Application Support/Code/User/globalStorage/state.db": "",
+		".cursor/ide_state.json":                  "{}\n",
 		"work/app/.agents/skills/deploy/SKILL.md": namedSkill("deploy"),
 		"work/app/.github/skills/gh/SKILL.md":     namedSkill("gh"),
 	})
 
-	if got, want := skillClients(manifest, "work/app/.agents/skills/deploy/SKILL.md"), []string{"antigravity", "codex", "cursor", "opencode", "vscode"}; !slices.Equal(got, want) {
+	// Project .agents/skills is read by antigravity, codex, cursor,
+	// opencode and vscode; cursor and vscode are the installed ones.
+	if got, want := skillClients(manifest, "work/app/.agents/skills/deploy/SKILL.md"), []string{"cursor", "vscode"}; !slices.Equal(got, want) {
 		t.Errorf("project .agents/skills clients = %v, want %v", got, want)
 	}
 	if got, want := skillClients(manifest, "work/app/.github/skills/gh/SKILL.md"), []string{"vscode"}; !slices.Equal(got, want) {
@@ -141,6 +301,7 @@ func TestScan_ProjectSkills(t *testing.T) {
 // — which never becomes a clients[] row.
 func TestScan_SkillFallbacks(t *testing.T) {
 	manifest := runScan(t, map[string]string{
+		".hermes/auth.json":                            "{}\n",
 		".hermes/skills/official/apple/notes/SKILL.md": namedSkill("apple-notes"),
 		"repos/tools/loose/SKILL.md":                   namedSkill("loose"),
 	})
@@ -310,10 +471,10 @@ func TestWalk(t *testing.T) {
 		"node_modules/p/.fake/config.json": &fstest.MapFile{Data: []byte("{}")}, // pruned dir
 		"a/b/c/d/e/f/.fake/config.json":    &fstest.MapFile{Data: []byte("{}")}, // beyond depth
 	}
-	sc := fakeScanner{projectConfigs: []string{".fake/config.json"}}
+	src := Source{Path: ".fake/config.json", Scope: Project, Read: noopRead}
 	s := newState(Root{FS: fsys, Path: "/home/test"}, 4, nil, nil)
 
-	hits, markers := walk(context.Background(), s, []Scanner{sc}, map[string]bool{".fake/config.json": true})
+	hits, markers := walk(context.Background(), s, []Source{src}, map[string]bool{".fake/config.json": true})
 
 	var hitPaths []string
 	for _, h := range hits {
@@ -362,16 +523,5 @@ func TestReadGitOrigin(t *testing.T) {
 	}
 }
 
-// fakeScanner is a minimal Scanner for walk tests.
-type fakeScanner struct {
-	projectConfigs []string
-}
-
-func (fakeScanner) Name() string                  { return "fake" }
-func (fakeScanner) Presence(string) presenceDef   { return presenceDef{} }
-func (fakeScanner) GlobalConfigs(string) []string { return nil }
-func (f fakeScanner) ProjectConfigs() []string    { return f.projectConfigs }
-func (fakeScanner) ScanHome(*state) observations  { return observations{} }
-func (fakeScanner) ScanProject(*state, string) observations {
-	return observations{}
-}
+// noopRead is a decoder for walk tests, which only assert routing.
+func noopRead(*state, string, string) observations { return observations{} }

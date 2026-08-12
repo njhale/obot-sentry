@@ -55,36 +55,6 @@ type claudeDesktopConfig struct {
 	MCPServers map[string]mcpServerSpec `json:"mcpServers"`
 }
 
-type claudeDesktopScanner struct{}
-
-func (claudeDesktopScanner) Name() string { return "claude_desktop" }
-
-func (claudeDesktopScanner) Presence(platform string) presenceDef {
-	return presenceDef{
-		appBundles: []string{"Claude.app"},
-		installDirs: []string{
-			"AppData/Local/AnthropicClaude", // legacy per-user installer
-			"AppData/Local/Packages/" + claudeDesktopMSIXPackage,
-		},
-		configPaths: claudeDesktopDirs(platform),
-	}
-}
-
-func (claudeDesktopScanner) GlobalConfigs(platform string) []string {
-	var out []string
-	for _, dir := range claudeDesktopDirs(platform) {
-		out = append(out,
-			path.Join(dir, "extensions-installations.json"),
-			path.Join(dir, "claude_desktop_config.json"),
-		)
-	}
-	return out
-}
-
-func (claudeDesktopScanner) ProjectConfigs() []string { return nil }
-
-func (claudeDesktopScanner) ScanProject(*state, string) observations { return observations{} }
-
 // ScanHome emits four flavors of observation, all tagged
 // client=claude_desktop:
 //
@@ -101,21 +71,11 @@ func (claudeDesktopScanner) ScanProject(*state, string) observations { return ob
 //     Cowork ships these as a bundle — there's no .mcp.json, no
 //     commands, no hooks; treating the bundle as a plugin would inflate
 //     the inventory with an empty wrapper, so only the skills surface.
-func (c claudeDesktopScanner) ScanHome(s *state) observations {
-	var obs observations
-	for _, dir := range claudeDesktopDirs(s.platform) {
-		obs.servers = append(obs.servers, scanClaudeDesktopExtensions(s, path.Join(dir, "extensions-installations.json"))...)
-		obs.add(scanClaudeDesktopServers(s, path.Join(dir, "claude_desktop_config.json")))
-		obs.add(scanCoworkRpmPlugins(s, dir))
-		obs.skills = append(obs.skills, scanCoworkSkillsPlugin(s, dir)...)
-	}
-	return obs
-}
-
+//
 // scanClaudeDesktopServers parses claude_desktop_config.json once and
 // emits both an MCP server and a connector plugin row per enabled
 // entry.
-func scanClaudeDesktopServers(s *state, configRel string) observations {
+func claudeDesktopServers(s *state, configRel, _ string) observations {
 	cfg, ok := readJSON[claudeDesktopConfig](s.fsys, configRel)
 	if !ok {
 		return observations{}
@@ -331,4 +291,18 @@ func scanClaudeDesktopExtensions(s *state, extRel string) []types.DeviceScanMCPS
 		})
 	}
 	return out
+}
+
+// claudeDesktopRegistry reads the extension registry.
+func claudeDesktopRegistry(s *state, rel, _ string) observations {
+	return observations{servers: scanClaudeDesktopExtensions(s, rel)}
+}
+
+// claudeDesktopCowork inventories the Cowork agent-mode trees under one
+// Claude Desktop config directory: RPM-installed plugins with their
+// nested servers, and the skills bundle.
+func claudeDesktopCowork(s *state, dir, _ string) observations {
+	obs := scanCoworkRpmPlugins(s, dir)
+	obs.skills = append(obs.skills, scanCoworkSkillsPlugin(s, dir)...)
+	return obs
 }

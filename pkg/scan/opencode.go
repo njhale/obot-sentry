@@ -45,53 +45,6 @@ type opencodeEntry struct {
 	Enabled     *bool          `json:"enabled"`
 }
 
-type opencodeScanner struct{}
-
-func (opencodeScanner) Name() string { return "opencode" }
-
-func (opencodeScanner) Presence(string) presenceDef {
-	return presenceDef{binaries: []string{"opencode"}, configPaths: []string{".config/opencode"}}
-}
-
-func (opencodeScanner) GlobalConfigs(string) []string {
-	return []string{opencodeGlobalConfigJSONRel, opencodeGlobalConfigJSONCRel}
-}
-
-func (opencodeScanner) ProjectConfigs() []string { return []string{"opencode.json"} }
-
-func (c opencodeScanner) ScanHome(s *state) observations {
-	var (
-		obs            observations
-		npmPluginNames []string
-	)
-	for _, rel := range []string{opencodeGlobalConfigJSONRel, opencodeGlobalConfigJSONCRel} {
-		cfg, ok := readJSON[opencodeConfig](s.fsys, rel)
-		if !ok {
-			continue
-		}
-		configPath := s.addFileOrAbs(rel)
-		obs.servers = append(obs.servers, opencodeEmit(cfg.MCP, configPath, "")...)
-		for _, name := range cfg.Plugin {
-			if !slices.Contains(npmPluginNames, name) {
-				npmPluginNames = append(npmPluginNames, name)
-			}
-		}
-	}
-	obs.add(scanOpenCodeLocalPlugins(s))
-	obs.add(scanOpenCodeNPMPlugins(s, npmPluginNames))
-	return obs
-}
-
-func (opencodeScanner) ScanProject(s *state, configRel string) observations {
-	cfg, ok := readJSON[opencodeConfig](s.fsys, configRel)
-	if !ok {
-		return observations{}
-	}
-	configPath := s.addFileOrAbs(configRel)
-	projectPath := s.abs(path.Dir(configRel))
-	return observations{servers: opencodeEmit(cfg.MCP, configPath, projectPath)}
-}
-
 func opencodeEmit(servers map[string]opencodeEntry, configPath, projectPath string) []types.DeviceScanMCPServer {
 	out := make([]types.DeviceScanMCPServer, 0, len(servers))
 	for _, name := range sortedKeys(servers) {
@@ -241,4 +194,39 @@ func emitOpenCodePluginDir(s *state, installRel, fallbackName, pluginType, marke
 		}},
 		servers: servers,
 	}
+}
+
+// opencodeServers reads an OpenCode config. The home configs (.json and
+// .jsonc) and a project opencode.json share one shape.
+func opencodeServers(s *state, rel, projectPath string) observations {
+	cfg, ok := readJSON[opencodeConfig](s.fsys, rel)
+	if !ok {
+		return observations{}
+	}
+	return observations{servers: opencodeEmit(cfg.MCP, s.addFileOrAbs(rel), projectPath)}
+}
+
+// opencodeLocalPlugins inventories plugins dropped into the config dir.
+func opencodeLocalPlugins(s *state, _, _ string) observations {
+	return scanOpenCodeLocalPlugins(s)
+}
+
+// opencodeNPMPlugins inventories the npm-installed plugins named by the
+// `plugin` array in either home config. The names are re-read here
+// rather than threaded from opencodeServers so each source stays
+// independent of the order the pipeline runs them in.
+func opencodeNPMPlugins(s *state, _, _ string) observations {
+	var names []string
+	for _, rel := range []string{opencodeGlobalConfigJSONRel, opencodeGlobalConfigJSONCRel} {
+		cfg, ok := readJSON[opencodeConfig](s.fsys, rel)
+		if !ok {
+			continue
+		}
+		for _, name := range cfg.Plugin {
+			if !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
+	return scanOpenCodeNPMPlugins(s, names)
 }
