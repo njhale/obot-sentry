@@ -26,9 +26,9 @@ This install package contains:
 1. Open `ai.obot.obot-sentry.mobileconfig` in a text editor and replace
    `REPLACE_WITH_ENROLLMENT_KEY` with your enrollment key.
 
-2. Go to *Devices > Configuration > Create > New policy*, choose platform
-   **macOS** and profile type **Templates > Custom**, then upload the edited
-   file.
+2. Go to *Devices > Manage devices > Configuration > Create > New policy*,
+   choose platform **macOS** and profile type **Templates > Custom**, then
+   upload the edited file.
 
 3. Set the **Assignments** to the same targets selected by the app.
 
@@ -38,8 +38,10 @@ sync.
 
 ## 3. Grant file access
 
-Create a second **Templates > Custom** profile, upload
-`ai.obot.obot-sentry.pppc.mobileconfig` as-is, and assign it to the same targets.
+Create a second policy for `ai.obot.obot-sentry.pppc.mobileconfig` the same
+way as step 2 above: go to *Devices > Manage devices > Configuration > Create >
+New policy*, choose platform **macOS** and profile type **Templates > Custom**,
+upload the file as-is, and assign it to the same targets.
 
 ## What the installer does
 
@@ -74,7 +76,7 @@ Create a second **Templates > Custom** profile, upload
    sudo killall IntuneMdmAgent
    ```
 
-   Alternatively, the user can open Company Portal and select **Check settings**.
+   Alternatively, the user can open Company Portal and select **Check Status**.
 
    If the app reports installed but the receipt is missing, check the contents of `/var/log/install.log`
    to debug further.
@@ -159,8 +161,8 @@ files, re-upload them to the same profiles.
 
 ## Uninstall
 
-1. Add `uninstall.sh` as a shell script under *Devices > macOS > Scripts > Add*,
-   and set **Run script as signed-in user** to **No**.
+1. Add `uninstall.sh` as a shell script under *Devices > macOS > Manage devices >
+   Scripts > Add*, and set **Run script as signed-in user** to **No**.
 
 2. Assign it to the targets you are removing Obot Sentry from. It is idempotent,
    so a device that already ran it is unaffected.
