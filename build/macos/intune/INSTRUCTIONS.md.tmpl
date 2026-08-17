@@ -2,9 +2,8 @@
 
 This install package contains:
 
-- `obot-sentry.pkg` — the obot-sentry device agent (version
-  {{.obotSentryVersion}}), signed and notarized. Installs the agent and its
-  two launchd jobs.
+- `obot-sentry-{{.obotSentryVersion}}.pkg` — the obot-sentry device agent,
+  signed and notarized. Installs the agent and its two launchd jobs.
 - `ai.obot.obot-sentry.mobileconfig` — the deployment configuration. The
   server URL and scan interval are already filled in; you supply the
   enrollment key.
@@ -14,7 +13,7 @@ This install package contains:
 ## 1. Add the installer
 
 1. In the Intune admin center, go to *Apps > macOS > Add*, select **macOS app
-   (PKG)**, and upload `obot-sentry.pkg`.
+   (PKG)**, and upload `obot-sentry-{{.obotSentryVersion}}.pkg`.
 
 2. In the **Detection rules** tab, set **Ignore app version** to **Yes**.
 
@@ -152,9 +151,9 @@ hook cannot tell which MCP server a call targets, the call is blocked.
 {{end}}
 ## Upgrades
 
-To upgrade to a new version of Obot Sentry, upload the new `obot-sentry.pkg` file
-to the existing app and save. Devices pick it up on the management agent's next
-check-in.
+To upgrade to a new version of Obot Sentry, upload the new
+`obot-sentry-{{.obotSentryVersion}}.pkg` file to the existing app and save.
+Devices pick it up on the management agent's next check-in.
 
 The profiles are separate. If the new download contains changed `.mobileconfig`
 files, re-upload them to the same profiles.
