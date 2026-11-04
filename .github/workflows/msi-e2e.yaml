@@ -1,0 +1,46 @@
+name: msi-e2e
+
+on:
+  push:
+    branches:
+      - enrollment-failure-reporting-e2e
+
+permissions:
+  contents: read
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - name: Build binaries
+        shell: pwsh
+        run: |
+          $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
+          go build -o bin/obot-sentry.exe .
+          go build -ldflags="-H=windowsgui" -o bin/obot-sentryw.exe ./cmd/obot-sentryw
+      - name: Install WiX Toolset v4
+        run: dotnet tool install --global wix --version 4.0.6
+      - name: Build MSIs
+        shell: pwsh
+        run: |
+          ./build/windows/msi.ps1 -Version 0.0.1 -Exe bin/obot-sentry.exe -Launcher bin/obot-sentryw.exe
+          Copy-Item dist/obot-sentry.msi dist/v1.msi
+          ./build/windows/msi.ps1 -Version 0.0.2 -Exe bin/obot-sentry.exe -Launcher bin/obot-sentryw.exe
+          Copy-Item dist/obot-sentry.msi dist/v2.msi
+      - name: Run install scenarios
+        shell: pwsh
+        run: ./.github/e2e/msi-e2e.ps1
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msi-e2e-logs
+          path: |
+            *.log
+            mock.err
