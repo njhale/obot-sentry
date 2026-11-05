@@ -61,7 +61,25 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*identity.Identity, state.S
 	if st.Enrolled(serverURL, id.DeviceID, id.PublicKeyFingerprint()) {
 		return id, st, nil
 	}
+	return a.enroll(ctx, serverURL, id, st)
+}
 
+// Enroll enrolls the machine identity with the configured server even when this user's state already records an
+// enrollment, so a server that has since deleted the device or the key is noticed.
+func (a *Agent) Enroll(ctx context.Context) (*identity.Identity, state.State, error) {
+	st, err := state.Load(a.DataDir)
+	if err != nil {
+		return nil, st, err
+	}
+	id, err := identity.Load(a.IdentityDir)
+	if err != nil {
+		return nil, st, err
+	}
+	return a.enroll(ctx, client.NormalizeBaseURL(a.Config.ServerURL), id, st)
+}
+
+// enroll registers id with the server using the configured enrollment key and records the enrollment in st.
+func (a *Agent) enroll(ctx context.Context, serverURL string, id *identity.Identity, st state.State) (*identity.Identity, state.State, error) {
 	if a.Config.EnrollmentKey == "" {
 		return nil, st, fmt.Errorf("device %s is not enrolled with %s and no enrollment key is configured", id.DeviceID, serverURL)
 	}

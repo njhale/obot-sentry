@@ -21,10 +21,10 @@ Everything below needs an Administrator PowerShell.
    ```
 
    `0` means the agent is installed. During a first install the installer also
-   enrolls the device, and exit code `1603` means the install failed and left
-   nothing behind. The usual cause is the server rejecting the enrollment key
-   (it is invalid, expired, or deleted) or the license's device limit. The
-   reason is in the event log:
+   asks the server whether it accepts the enrollment key, without enrolling the
+   device, and exit code `1603` means the install failed and left nothing
+   behind. The usual cause is the server rejecting the key because it is
+   invalid, expired, or deleted. The reason is in the event log:
 
    ```powershell
    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Obot Sentry' } -MaxEvents 5 | Format-List TimeCreated, Id, Message
@@ -32,9 +32,8 @@ Everything below needs an Administrator PowerShell.
 
    If the server can't be reached during the install, the install still
    succeeds and the scheduled scan enrolls the device later. Upgrades skip the
-   enrollment check, so an expired key in the upgrade command doesn't block
-   devices that are already enrolled. Add `ENROLLMENT_CHECK=0` when building a
-   reusable Windows image, so the image itself isn't enrolled.
+   key check, so an expired key in the upgrade command doesn't block devices
+   that are already enrolled.
 {{if .enforcementEnabled}}
    `ENFORCEMENT=1` writes `EnforcementEnabled` to the registry, which the hook
    task reads. Keep it in the command you use for upgrades too: an install
@@ -105,8 +104,13 @@ Everything below needs an Administrator PowerShell.
 
 4. Ensure scans are landing:
 
-   Enrollment and scan failures from every user on the device are recorded in
-   the Application event log under the `Obot Sentry` source:
+   Obot lists devices that failed to enroll, and why, under **Enrollment
+   Keys** on the device configuration page.
+
+   On the device itself, enrollment and scan failures from every user are
+   recorded in the Application event log under the `Obot Sentry` source. Find
+   them in Event Viewer under **Windows Logs › Application**, filtered by that
+   source, or with PowerShell:
 
    ```powershell
    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Obot Sentry' } -MaxEvents 20 | Format-List TimeCreated, Id, Message
@@ -114,9 +118,9 @@ Everything below needs an Administrator PowerShell.
 
    | Event ID | Meaning |
    | --- | --- |
-   | 100 | The installer enrolled the device. |
-   | 101 | The server rejected the enrollment, so the installer stopped. |
-   | 102 | The installer couldn't reach the server; scans enroll the device later. |
+   | 100 | The server accepted the installer's enrollment key. |
+   | 101 | The server rejected the enrollment key, so the installer stopped. |
+   | 102 | The installer couldn't check the key; scans enroll the device later. |
    | 110 | A user's scans started failing, or failed for a new reason. |
    | 111 | A user's scans are submitting again after failing. |
 

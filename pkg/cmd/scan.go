@@ -118,10 +118,13 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 			outcome = "error"
 			scanState.LastStatus = "error"
 			scanState.LastError = submitErr.Error()
+			// reportScanEvent below logs this failure unless it already did, so either way it's reported now.
+			scanState.ReportedError = submitErr.Error()
 		} else {
 			scanState.LastSubmitAt = &now
 			scanState.LastStatus = "ok"
 			scanState.LastError = ""
+			scanState.ReportedError = ""
 		}
 		s.recordScanOutcome(cmd, cacheDir, scanState, startedAt, outcome, submitErr)
 	}
@@ -133,13 +136,13 @@ func (s *Scan) Run(cmd *cobra.Command, _ []string) error {
 // or 0 when there's nothing new to report.
 // The scan task runs every 10 minutes and a failing submission isn't throttled, so logging every failure would
 // repeat the same error all day. Instead, log:
-// - The first failure, and any failure whose error differs from the last one
-// - The first success after a failure
+// - The first failure, and any failure whose error differs from the last one reported
+// - The first success after a reported failure
 func scanEventID(previous state.ScanState, submitErr error) uint32 {
 	switch {
-	case submitErr != nil && (previous.LastStatus != "error" || previous.LastError != submitErr.Error()):
+	case submitErr != nil && previous.ReportedError != submitErr.Error():
 		return eventlog.ScanFailed
-	case submitErr == nil && previous.LastStatus == "error":
+	case submitErr == nil && previous.ReportedError != "":
 		return eventlog.ScanRecovered
 	default:
 		return 0

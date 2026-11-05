@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -72,5 +73,56 @@ func TestSubmitLocalAgentAuditLogsMintsFreshJWTPerCall(t *testing.T) {
 	}
 	if tokens[0] == tokens[1] {
 		t.Fatal("expected a freshly minted device JWT per submit, got identical tokens")
+	}
+}
+
+// TestCheckEnrollmentCredential checks that the credential check sends the credential to the check route and returns
+// the server's refusal as an *ErrHTTP.
+func TestCheckEnrollmentCredential(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		wantCode int
+	}{
+		{
+			name:   "accepted",
+			status: http.StatusNoContent,
+		},
+		{
+			name:     "rejected",
+			status:   http.StatusUnauthorized,
+			wantCode: http.StatusUnauthorized,
+		},
+		{
+			name:     "server without the check",
+			status:   http.StatusForbidden,
+			wantCode: http.StatusForbidden,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/mdm/enroll/check" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer ode1-1-2-secret" {
+					t.Errorf("Authorization = %q", got)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			err := New(srv.URL).CheckEnrollmentCredential(t.Context(), "ode1-1-2-secret")
+			if tt.wantCode == 0 {
+				if err != nil {
+					t.Fatalf("CheckEnrollmentCredential() error = %v", err)
+				}
+				return
+			}
+			httpErr, ok := errors.AsType[*types.ErrHTTP](err)
+			if !ok || httpErr.Code != tt.wantCode {
+				t.Fatalf("CheckEnrollmentCredential() error = %v, want HTTP %d", err, tt.wantCode)
+			}
+		})
 	}
 }

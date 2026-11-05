@@ -1,11 +1,13 @@
 // Package client wraps the obot apiclient for the calls a device
-// makes: enrolling its identity key (bearer: ode1 enrollment
-// credential), submitting scans, and submitting local-agent audit logs
-// (bearer: self-signed device JWT).
+// makes: checking an enrollment credential and enrolling its identity key
+// (bearer: ode1 enrollment credential), submitting scans, and submitting
+// local-agent audit logs (bearer: self-signed device JWT).
 package client
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -50,6 +52,29 @@ func (c *Client) Enroll(ctx context.Context, credential string, id *identity.Ide
 		return nil, err
 	}
 	return &resp.Device, nil
+}
+
+// CheckEnrollmentCredential asks the server whether it accepts credential for enrollment, without enrolling this
+// device. It returns the server's *types.ErrHTTP when the server refuses.
+// An invalid credential gets a 401 from every server version. A server too old to have the check answers a valid
+// credential with a 403, because the credential isn't allowed on a route that server doesn't know.
+func (c *Client) CheckEnrollmentCredential(ctx context.Context, credential string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.api.BaseURL+"/mdm/enroll/check", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+credential)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= http.StatusBadRequest {
+		// Match the errors apiclient returns for its own calls: the status code plus the response body.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return types.NewErrHTTP(resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // SubmitScan mints a fresh short-lived device JWT and submits the

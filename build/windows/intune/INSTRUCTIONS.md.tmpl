@@ -17,12 +17,12 @@ This install package contains:
    msiexec /i "obot-sentry.msi" /qn SERVER_URL="{{.serverURL}}" ENROLLMENT_KEY="REPLACE_WITH_ENROLLMENT_KEY" SCAN_INTERVAL_MINUTES="{{.scanIntervalMinutes}}"{{if .enforcementEnabled}} ENFORCEMENT=1{{end}}
    ```
 
-   A first install also enrolls the device. If the server rejects the
-   enrollment, because the key is invalid, expired, or deleted or the
-   license's device limit is reached, the install fails with exit code `1603`
-   and leaves nothing behind, and Intune reports the app as failed on that
-   device. If the server can't be reached yet, such as during Autopilot before
-   the network is up, the install still succeeds and the device enrolls on its
+   A first install also asks the server whether it accepts the enrollment
+   key, without enrolling the device. If the server rejects the key because it
+   is invalid, expired, or deleted, the install fails with exit code `1603` and
+   leaves nothing behind, and Intune reports the app as failed on that device.
+   If the server can't be reached yet, such as during Autopilot before the
+   network is up, the install still succeeds and the device enrolls on its
    first scan. Upgrades skip the check, so an expired key in the install
    command doesn't block devices that are already enrolled.
 {{if .enforcementEnabled}}
@@ -108,8 +108,13 @@ This install package contains:
 
 4. Ensure scans are landing:
 
-   Enrollment and scan failures from every user on the device are recorded in
-   the Application event log under the `Obot Sentry` source:
+   Obot lists devices that failed to enroll, and why, under **Enrollment
+   Keys** on the device configuration page.
+
+   On the device itself, enrollment and scan failures from every user are
+   recorded in the Application event log under the `Obot Sentry` source. Find
+   them in Event Viewer under **Windows Logs › Application**, filtered by that
+   source, or with PowerShell:
 
    ```powershell
    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Obot Sentry' } -MaxEvents 20 | Format-List TimeCreated, Id, Message
@@ -117,9 +122,9 @@ This install package contains:
 
    | Event ID | Meaning |
    | --- | --- |
-   | 100 | The installer enrolled the device. |
-   | 101 | The server rejected the enrollment, so the installer stopped. |
-   | 102 | The installer couldn't reach the server; scans enroll the device later. |
+   | 100 | The server accepted the installer's enrollment key. |
+   | 101 | The server rejected the enrollment key, so the installer stopped. |
+   | 102 | The installer couldn't check the key; scans enroll the device later. |
    | 110 | A user's scans started failing, or failed for a new reason. |
    | 111 | A user's scans are submitting again after failing. |
 

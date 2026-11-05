@@ -9,12 +9,12 @@ const Source = "Obot Sentry"
 
 // Event IDs, documented in the Windows install instructions.
 const (
-	// EnrollSucceeded: the installer enrolled the device.
-	EnrollSucceeded uint32 = 100
-	// EnrollRejected: the server rejected the installer's enrollment, so the install stopped.
-	EnrollRejected uint32 = 101
-	// EnrollDeferred: the installer couldn't enroll for another reason; scans enroll the device later.
-	EnrollDeferred uint32 = 102
+	// KeyAccepted: the server accepted the installer's enrollment key.
+	KeyAccepted uint32 = 100
+	// KeyRejected: the server rejected the installer's enrollment key, so the install stopped.
+	KeyRejected uint32 = 101
+	// KeyCheckDeferred: the installer couldn't check its enrollment key; scans enroll the device later.
+	KeyCheckDeferred uint32 = 102
 	// ScanFailed: a user's scans started failing, or failed for a new reason.
 	ScanFailed uint32 = 110
 	// ScanRecovered: a user's scans are submitting again after failing.

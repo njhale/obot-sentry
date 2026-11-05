@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -185,5 +186,32 @@ func TestEnsureEnrolledExplainsRejections(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err, tt.wantMessage)
 			}
 		})
+	}
+}
+
+// TestEnrollContactsServerWhenAlreadyEnrolled checks that Enroll asks the server even when this user's state records
+// an enrollment, while EnsureEnrolled trusts that state.
+func TestEnrollContactsServerWhenAlreadyEnrolled(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.DeviceEnrollResponse{Device: types.Device{MDMConfigurationID: 1}})
+	}))
+	defer srv.Close()
+
+	a, _, _ := enrolledAgent(t, srv.URL, "ode1-1-2-secret")
+	if _, _, err := a.EnsureEnrolled(t.Context()); err != nil {
+		t.Fatalf("EnsureEnrolled() error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("EnsureEnrolled() made %d requests, want 0", requests)
+	}
+	if _, _, err := a.Enroll(t.Context()); err != nil {
+		t.Fatalf("Enroll() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("Enroll() made %d requests, want 1", requests)
 	}
 }

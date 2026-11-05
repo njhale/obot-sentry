@@ -85,6 +85,10 @@ type ScanState struct {
 	LastError      string     `json:"lastError,omitempty"`
 	DeviceID       string     `json:"deviceID,omitempty"`
 	ScannerVersion string     `json:"scannerVersion,omitempty"`
+	// ReportedError is the submission failure last written to the OS event log, cleared once a submission succeeds.
+	// It's kept apart from LastError because versions without event logging already wrote LastError, and treating
+	// that as reported would hide a failure that started before an upgrade.
+	ReportedError string `json:"reportedError,omitempty"`
 }
 
 // LoadScanState reads the scan state from dir. A missing or corrupt
